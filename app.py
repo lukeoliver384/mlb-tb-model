@@ -61,12 +61,8 @@ fg_rates = D.load_fangraphs_csv(fg_csv) if fg_csv else {}
 # --------------------------------------------------------------------------- #
 @st.cache_data(ttl=900, show_spinner="Pulling lineups & stats from MLB API…")
 def load(date_str: str, season: int, want_recent: bool, recent_days: int):
-    slate = D.build_slate(date_str, season)
-    if want_recent:
-        for mu in slate:
-            for b in mu.home_lineup + mu.away_lineup:
-                D.fill_recent_form(b, season, recent_days)
-    return slate
+    return D.build_slate(date_str, season,
+                         recent_days=recent_days if want_recent else 0)
 
 @st.cache_data(ttl=3600, show_spinner="Pulling Statcast expected stats…")
 def load_savant(season: int):
@@ -98,7 +94,6 @@ def project_side(batters, opp_pitcher, venue):
     rows = []
     if not opp_pitcher:
         return rows
-    pmult = PF.park_mult(venue) if use_park else 1.0
     for b in batters:
         if use_splits:
             b_rate, b_n = b.tb_per_pa_vs(opp_pitcher.throws)
@@ -128,6 +123,11 @@ def project_side(batters, opp_pitcher, venue):
             this_share = E.pa_vs_starter(b.order, opp_pitcher.bf_per_start, total_pa) / total_pa
         else:
             this_share = sp_share_manual
+        # Batting side (switch hitters bat opposite the pitcher's hand)
+        side = b.bats
+        if side == "S":
+            side = "L" if opp_pitcher.throws == "R" else "R"
+        pmult = PF.park_mult_hand(venue, side) if use_park else 1.0
         shares = b.hit_shares()
         ht = E.HitTypeShares(*shares) if shares else E.HitTypeShares()
         inp = E.ProjectionInput(

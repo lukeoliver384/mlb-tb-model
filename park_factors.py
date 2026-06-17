@@ -55,3 +55,64 @@ PA_BY_SLOT = {1: 4.65, 2: 4.55, 3: 4.45, 4: 4.35, 5: 4.25,
 
 def expected_pa(slot: int) -> float:
     return PA_BY_SLOT.get(slot, 4.3)
+
+
+# Park handedness advantage, from your "Park Notes" sheet.
+# "L" = favors left-handed batters, "R" = favors righties, "N" = neutral.
+# Parks not listed default to neutral. (NL parks: fill in as you gather data.)
+PARK_HANDEDNESS = {
+    # --- from your Park Notes sheet ---
+    "Oriole Park at Camden Yards": "R",
+    "Fenway Park": "L",
+    "Yankee Stadium": "L",
+    "Tropicana Field": "N",
+    "Rogers Centre": "N",
+    "Rate Field": "N",
+    "Guaranteed Rate Field": "N",
+    "Progressive Field": "L",
+    "Comerica Park": "R",
+    "Kauffman Stadium": "N",
+    "Target Field": "L",
+    "Daikin Park": "R",
+    "Minute Maid Park": "R",
+    "Angel Stadium": "R",
+    "Sutter Health Park": "N",
+    "T-Mobile Park": "N",
+    "Globe Life Field": "N",
+    "Truist Park": "R",
+    "loanDepot park": "L",
+    "Citi Field": "N",
+    "Citizens Bank Park": "L",
+    "Nationals Park": "N",
+    # --- blank in your sheet; my best-known leans, verify these ---
+    "Wrigley Field": "N",            # wind-dependent, ~neutral
+    "Great American Ball Park": "L", # short right porch
+    "American Family Field": "N",
+    "PNC Park": "L",                 # short right, deep left
+    "Busch Stadium": "N",
+    "Chase Field": "N",
+    "Coors Field": "N",              # boosts everyone, little L/R lean
+    "Dodger Stadium": "N",
+    "Petco Park": "N",
+    "Oracle Park": "R",              # deep right-center suppresses LHB power
+}
+
+
+def park_mult_hand(venue: str, side: str,
+                   skew_fav: float = 0.03, skew_dis: float = -0.01) -> float:
+    """
+    Park TB multiplier adjusted for the batter's handedness.
+
+    Starts from the overall park factor, then nudges it by the park's handedness
+    lean: the favored side gets a small boost, the other side a smaller trim.
+    Kept deliberately conservative (default +3% / -1%) so handedness adds signal
+    without inflating the overall park effect.
+
+    `side` is the batter's actual batting side ("L"/"R"); for switch hitters the
+    caller should pass the side they'll bat from against this pitcher.
+    """
+    base = PARK_TB_MULT.get(venue, 1.00)
+    adv = PARK_HANDEDNESS.get(venue, "N")
+    if adv == "N" or side not in ("L", "R"):
+        return base
+    return base * (1 + (skew_fav if side == adv else skew_dis))
