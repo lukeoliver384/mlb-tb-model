@@ -188,6 +188,8 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
                 b.tb_vs_r = float(st.get("totalBases", 0))
     except Exception:
         pass
+    if not b.bats:
+        b.bats = batter_bats(b.mlbam_id)
     return b
 
 
@@ -225,6 +227,15 @@ def pitcher_throws(pid: int) -> str:
     try:
         person = _get(f"{STATSAPI}/people/{pid}")
         return person["people"][0].get("pitchHand", {}).get("code", "")
+    except Exception:
+        return ""
+
+
+def batter_bats(pid: int) -> str:
+    """Batter handedness ("L"/"R"/"S") from the player profile endpoint."""
+    try:
+        person = _get(f"{STATSAPI}/people/{pid}")
+        return person["people"][0].get("batSide", {}).get("code", "")
     except Exception:
         return ""
 
