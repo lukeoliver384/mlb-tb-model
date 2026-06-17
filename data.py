@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -316,17 +317,51 @@ def league_reliever_tb_per_bf_default() -> float:
 # --------------------------------------------------------------------------- #
 # Convenience: build a fully-populated slate                                  #
 # --------------------------------------------------------------------------- #
-def build_slate(date: str, season: int) -> list[Matchup]:
+def build_slate(date: str, season: int, recent_days: int = 0,
+                max_workers: int = 16) -> list[Matchup]:
+    """
+    Build the full slate, fetching all player stats in parallel.
+
+    A full slate is hundreds of API calls; doing them concurrently turns a
+    multi-minute sequential load into ~20-30s. Each call is already wrapped in
+    try/except, so one slow or missing player can't stall the whole slate.
+    """
     games = get_schedule(date)
-    for mu in games:
-        for side, attr in (("home", "home_pitcher"), ("away", "away_pitcher")):
-            p = getattr(mu, attr)
-            if p:
-                if not p.throws:
-                    p.throws = pitcher_throws(p.mlbam_id)
-                fill_pitcher_stats(p, season)
-        mu.home_lineup = get_lineup(mu.game_pk, "home")
-        mu.away_lineup = get_lineup(mu.game_pk, "away")
-        for b in mu.home_lineup + mu.away_lineup:
+
+    # 1) lineups (one boxscore call per side), in parallel
+    def _load_lineups(mu: Matchup):
+        try:
+            mu.home_lineup = get_lineup(mu.game_pk, "home")
+            mu.away_lineup = get_lineup(mu.game_pk, "away")
+        except Exception:
+            mu.home_lineup, mu.away_lineup = [], []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(_load_lineups, games))
+
+    # 2) gather every player, then fetch stats concurrently
+    pitchers = [getattr(mu, a) for mu in games
+                for a in ("home_pitcher", "away_pitcher") if getattr(mu, a)]
+    batters = [b for mu in games for b in (mu.home_lineup + mu.away_lineup)]
+
+    def _do_pitcher(p: Pitcher):
+        try:
+            if not p.throws:
+                p.throws = pitcher_throws(p.mlbam_id)
+            fill_pitcher_stats(p, season)
+        except Exception:
+            pass
+
+    def _do_batter(b: Batter):
+        try:
             fill_batter_stats(b, season)
+            if recent_days:
+                fill_recent_form(b, season, recent_days)
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(_do_pitcher, pitchers))
+        list(ex.map(_do_batter, batters))
+
     return games
