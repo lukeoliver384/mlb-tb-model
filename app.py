@@ -32,8 +32,20 @@ with st.sidebar:
     reg_k = st.number_input("Regression K (PA)", 0, 600, E.REG_K_PA, 5)
     use_splits = st.checkbox("Use L/R handedness splits", True)
     use_park = st.checkbox("Apply park factors", True)
-    sp_share = st.slider("Share of PAs vs the starter", 0.40, 1.00, 1.00, 0.05,
-                         help="1.00 = ignore bullpen (matches your sheet). Lower blends in a league-average bullpen for later PAs.")
+    auto_bullpen = st.checkbox("Auto starter/bullpen split (from starter depth)", True,
+                               help="Computes each batter's share of PAs vs the starter from his batters-faced/start. Uncheck to use a single slider.")
+    sp_share_manual = st.slider("Manual share of PAs vs starter", 0.40, 1.00, 1.00, 0.05,
+                                disabled=auto_bullpen)
+    bullpen_rate = st.number_input("Bullpen TB/BF (later PAs)", 0.28, 0.42, 0.345, 0.005, format="%.3f")
+
+    st.header("Statcast (expected TB)")
+    use_statcast = st.checkbox("Blend Statcast expected (xSLG)", True)
+    w_statcast = st.slider("Weight on expected vs actual", 0.0, 1.0, 0.5, 0.05, disabled=not use_statcast)
+
+    st.header("Recent form")
+    use_recent = st.checkbox("Blend recent form", True)
+    recent_days = st.slider("Window (days)", 7, 45, 21, disabled=not use_recent)
+    w_recent = st.slider("Weight on recent vs season", 0.0, 1.0, 0.35, 0.05, disabled=not use_recent)
     method = st.radio("Cover-probability method", ["Exact distribution (recommended)", "Poisson (sheet original)"])
     default_line = st.number_input("Default TB line", 0.5, 5.5, 1.5, 0.5)
     min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
@@ -48,8 +60,17 @@ fg_rates = D.load_fangraphs_csv(fg_csv) if fg_csv else {}
 # Load slate                                                                  #
 # --------------------------------------------------------------------------- #
 @st.cache_data(ttl=900, show_spinner="Pulling lineups & stats from MLB API…")
-def load(date_str: str, season: int):
-    return D.build_slate(date_str, season)
+def load(date_str: str, season: int, want_recent: bool, recent_days: int):
+    slate = D.build_slate(date_str, season)
+    if want_recent:
+        for mu in slate:
+            for b in mu.home_lineup + mu.away_lineup:
+                D.fill_recent_form(b, season, recent_days)
+    return slate
+
+@st.cache_data(ttl=3600, show_spinner="Pulling Statcast expected stats…")
+def load_savant(season: int):
+    return D.load_savant_expected(season, "batter"), D.load_savant_expected(season, "pitcher")
 
 colA, colB = st.columns([1, 5])
 with colA:
@@ -57,11 +78,13 @@ with colA:
 
 if go:
     try:
-        st.session_state["slate"] = load(date.isoformat(), int(season))
+        st.session_state["slate"] = load(date.isoformat(), int(season), use_recent, int(recent_days))
+        st.session_state["savant"] = load_savant(int(season)) if use_statcast else ({}, {})
     except Exception as ex:
         st.error(f"Could not load slate: {ex}")
 
 slate = st.session_state.get("slate")
+savant_bat, savant_pit = st.session_state.get("savant", ({}, {}))
 if not slate:
     st.info("Pick a date and click **Load slate**. Lineups appear ~3–4 hours before first pitch; "
             "until then you'll see probable pitchers but empty lineups.")
@@ -88,16 +111,32 @@ def project_side(batters, opp_pitcher, venue):
         if b.name.lower() in fg_rates:
             b_rate = fg_rates[b.name.lower()]["tb_per_pa"]
             b_n = fg_rates[b.name.lower()]["pa"]
+        # Recent-form blend (last-N days vs season)
+        if use_recent and b.recent_pa > 0:
+            recent_rate = b.recent_tb / b.recent_pa
+            b_rate = w_recent * recent_rate + (1 - w_recent) * b_rate
+        # Statcast expected blend (luck factor = est_slg/slg)
+        if use_statcast and b.mlbam_id in savant_bat:
+            b_rate = E.blend(b_rate, b_rate * savant_bat[b.mlbam_id]["luck"], w_statcast)
+        if use_statcast and opp_pitcher.mlbam_id in savant_pit:
+            p_rate = E.blend(p_rate, p_rate * savant_pit[opp_pitcher.mlbam_id]["luck"], w_statcast)
         if not b_rate or not p_rate:
             continue
+        # Starter/bullpen split
+        total_pa = PF.expected_pa(b.order)
+        if auto_bullpen and opp_pitcher.bf_per_start > 0:
+            this_share = E.pa_vs_starter(b.order, opp_pitcher.bf_per_start, total_pa) / total_pa
+        else:
+            this_share = sp_share_manual
         shares = b.hit_shares()
         ht = E.HitTypeShares(*shares) if shares else E.HitTypeShares()
         inp = E.ProjectionInput(
             batter_tb_per_pa=b_rate, batter_pa_sample=b_n,
             pitcher_tb_per_pa_allowed=p_rate, pitcher_bf_sample=max(opp_pitcher.bf, 1),
             line=default_line, side="Over",
-            expected_pa=PF.expected_pa(b.order), park_mult=pmult,
-            shares=ht, sp_share=sp_share, league=league_rate, reg_k=int(reg_k),
+            expected_pa=total_pa, park_mult=pmult,
+            shares=ht, sp_share=this_share, bullpen_rate=bullpen_rate,
+            league=league_rate, reg_k=int(reg_k),
         )
         r = E.project(inp)
         p_cover = r.p_cover if method.startswith("Exact") else r.p_cover_poisson
@@ -105,6 +144,7 @@ def project_side(batters, opp_pitcher, venue):
             "Batter": b.name, "Slot": b.order, "B": b.bats,
             "vs Pitcher": opp_pitcher.name, "P": opp_pitcher.throws,
             "Line": default_line,
+            "vsSP%": round(this_share * 100),
             "Proj TB": round(r.lam, 2),
             "P(Over)": round(p_cover, 3),
             "Fair Over odds": round(E.prob_to_american(p_cover), 0),
@@ -135,7 +175,7 @@ df = pd.DataFrame(all_rows)
 st.subheader("1 · Projections")
 st.caption("Sorted by projected total bases. Paste your odds in the next section to get edges.")
 view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
-             "Proj TB", "P(Over)", "Fair Over odds", "Venue"]
+             "vsSP%", "Proj TB", "P(Over)", "Fair Over odds", "Venue"]
 st.dataframe(df[view_cols].sort_values("Proj TB", ascending=False),
              use_container_width=True, hide_index=True)
 

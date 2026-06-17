@@ -97,6 +97,33 @@ def log5_rate(batter: float, pitcher: float, league: float = LEAGUE_TB_PER_PA) -
     return num / denom
 
 
+def blend(actual: float, expected: "float | None", w_expected: float) -> float:
+    """
+    Blend an actual rate with a Statcast *expected* rate.
+    w_expected in [0,1]: 0 = pure actual, 1 = pure expected.
+    If expected is missing, returns actual unchanged.
+    """
+    if expected is None or expected <= 0:
+        return actual
+    return (1 - w_expected) * actual + w_expected * expected
+
+
+def pa_vs_starter(slot: int, sp_bf_per_start: float, total_pa: float) -> float:
+    """
+    Expected number of this slot's PAs that come against the STARTER.
+    The starter faces roughly the first `sp_bf_per_start` hitters of the lineup;
+    slot s bats at team-PA indices s, s+9, s+18, ...  Count how many land within
+    the starter's workload, capped by the slot's total expected PAs.
+    """
+    if sp_bf_per_start <= 0 or slot < 1:
+        return 0.0
+    if sp_bf_per_start < slot:
+        n = 0.0
+    else:
+        n = (sp_bf_per_start - slot) / 9.0 + 1.0  # fractional is fine
+    return max(0.0, min(n, total_pa))
+
+
 # --------------------------------------------------------------------------- #
 # Total-bases distribution                                                     #
 # --------------------------------------------------------------------------- #
@@ -213,6 +240,7 @@ class ProjectionInput:
     park_mult: float = 1.0
     shares: HitTypeShares = field(default_factory=HitTypeShares)
     sp_share: float = 1.0                 # 1.0 = ignore bullpen (sheet behaviour)
+    bullpen_rate: "float | None" = None   # league-avg reliever TB/BF for non-SP PAs
     league: float = LEAGUE_TB_PER_PA
     reg_k: float = REG_K_PA
     use_regression: bool = True
@@ -243,7 +271,8 @@ def project(inp: ProjectionInput) -> ProjectionResult:
     lam = matchup * inp.expected_pa
 
     pmf_sp = single_pa_pmf(matchup, inp.shares)
-    pmf_pen = single_pa_pmf(inp.league * inp.park_mult, inp.shares)  # league-avg bullpen
+    pen_rate = (inp.bullpen_rate if inp.bullpen_rate else inp.league) * inp.park_mult
+    pmf_pen = single_pa_pmf(pen_rate, inp.shares)  # bullpen for later PAs
     dist = tb_distribution(inp.expected_pa, pmf_sp, pmf_pen, inp.sp_share)
 
     p_cover = p_cover_from_dist(dist, inp.line, inp.side)

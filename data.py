@@ -38,10 +38,15 @@ class Pitcher:
     bf: float = 0.0
     tb_per_bf_vs_l: float = 0.0
     tb_per_bf_vs_r: float = 0.0
+    games_started: float = 0.0
 
     @property
     def tb_per_bf(self) -> float:
         return self.tb_allowed / self.bf if self.bf else 0.0
+
+    @property
+    def bf_per_start(self) -> float:
+        return self.bf / self.games_started if self.games_started else 0.0
 
 
 @dataclass
@@ -60,6 +65,8 @@ class Batter:
     double: float = 0.0
     triple: float = 0.0
     hr: float = 0.0
+    recent_pa: float = 0.0
+    recent_tb: float = 0.0
 
     @property
     def tb_per_pa(self) -> float:
@@ -195,6 +202,7 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
         p.throws = sd["stats"][0]["splits"][0].get("player", {}).get("pitchHand", "") or p.throws
         p.tb_allowed = _tb_allowed(st)
         p.bf = float(st.get("battersFaced", 0))
+        p.games_started = float(st.get("gamesStarted", 0))
     except Exception:
         pass
     try:
@@ -247,6 +255,62 @@ def load_fangraphs_csv(path_or_buffer):
                   + 4 * float(row.get("HR", 0) or 0))
         out[name] = {"tb_per_pa": tb / pa if pa else 0, "pa": pa}
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Recent form (MLB StatsAPI byDateRange)                                       #
+# --------------------------------------------------------------------------- #
+def fill_recent_form(b: Batter, season: int, days: int = 21) -> Batter:
+    """Last-N-days TB/PA via byDateRange. Stored on b.recent_pa / b.recent_tb."""
+    end = dt.date.today()
+    start = end - dt.timedelta(days=days)
+    try:
+        data = _get(f"{STATSAPI}/people/{b.mlbam_id}/stats",
+                    stats="byDateRange", group="hitting", season=season, sportId=1,
+                    startDate=start.isoformat(), endDate=end.isoformat())
+        st = data["stats"][0]["splits"][0]["stat"]
+        b.recent_pa = float(st.get("plateAppearances", 0))
+        b.recent_tb = float(st.get("totalBases", 0))
+    except Exception:
+        pass
+    return b
+
+
+# --------------------------------------------------------------------------- #
+# Statcast expected stats (Baseball Savant)                                    #
+# --------------------------------------------------------------------------- #
+def load_savant_expected(season: int, kind: str = "batter") -> dict:
+    """
+    Pull Savant expected_statistics leaderboard. Returns
+        {player_id: {"slg": float, "est_slg": float, "luck": est_slg/slg}}
+    `luck` < 1 means the player has out-hit his contact quality (regress down);
+    > 1 means unlucky (regress up). Applied to actual TB/PA in the app.
+    """
+    url = ("https://baseballsavant.mlb.com/leaderboard/expected_statistics"
+           f"?type={kind}&year={season}&position=&team=&min=q&csv=true")
+    out = {}
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        import io, csv
+        reader = csv.DictReader(io.StringIO(r.text))
+        for row in reader:
+            try:
+                pid = int(row.get("player_id") or row.get("\ufeffplayer_id"))
+                slg = float(row.get("slg") or 0)
+                est = float(row.get("est_slg") or 0)
+            except (TypeError, ValueError):
+                continue
+            if slg > 0 and est > 0:
+                out[pid] = {"slg": slg, "est_slg": est, "luck": est / slg}
+    except Exception:
+        pass
+    return out
+
+
+def league_reliever_tb_per_bf_default() -> float:
+    """Bullpen TB/BF default (relievers run a touch better than overall league)."""
+    return 0.345
 
 
 # --------------------------------------------------------------------------- #
