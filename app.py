@@ -196,38 +196,58 @@ view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
 st.dataframe(df[view_cols].sort_values("Proj TB", ascending=False),
              use_container_width=True, hide_index=True)
 
-st.subheader("2 · Paste your odds → edges")
-st.caption("Enter the Over price (American) you're getting for each batter. Leave blank to skip. "
-           "Best/value plays float to the top.")
+st.subheader("2 · Paste your odds → edges (both sides)")
+st.caption("Enter the Over and/or Under price (American) for each batter. The model checks BOTH sides "
+           "and surfaces whichever is +EV — so hitters that project under the line show up as Under value. "
+           "If you enter both prices, the market is de-vigged for a cleaner edge.")
 odds_df = df[["Game", "Batter", "Line", "P(Over)"]].copy()
-odds_df["Your Over odds"] = ""
+odds_df["Over odds"] = ""
+odds_df["Under odds"] = ""
 edited = st.data_editor(odds_df, use_container_width=True, hide_index=True,
                         disabled=["Game", "Batter", "Line", "P(Over)"])
 
+def _num(x):
+    try:
+        return float(str(x).strip())
+    except (ValueError, TypeError):
+        return None
+
 results = []
 for _, row in edited.iterrows():
-    raw = str(row["Your Over odds"]).strip()
-    if not raw:
+    over_odds, under_odds = _num(row["Over odds"]), _num(row["Under odds"])
+    if over_odds is None and under_odds is None:
         continue
-    try:
-        odds = float(raw)
-    except ValueError:
-        continue
-    p = float(row["P(Over)"])
-    be = E.american_to_implied(odds)
-    payout = E.american_to_decimal_profit(odds)
-    ev = p * payout - (1 - p)
-    edge = p - be
-    results.append({
-        "Game": row["Game"], "Batter": row["Batter"], "Line": row["Line"],
-        "P(Over)": round(p, 3), "Your odds": odds, "Break-even": round(be, 3),
-        "Edge": round(edge, 3), "Model EV": round(ev, 3),
-        "Verdict": "VALUE" if edge >= min_edge else ("Lean" if edge >= 0 else "Pass"),
-    })
+    p_over = float(row["P(Over)"])
+    p_under = 1 - p_over
+    # Fair market probs: de-vig if both prices present, else use the single implied price
+    if over_odds is not None and under_odds is not None:
+        fair_over, fair_under = E.no_vig_two_way(over_odds, under_odds)
+    else:
+        fair_over = E.american_to_implied(over_odds) if over_odds is not None else None
+        fair_under = E.american_to_implied(under_odds) if under_odds is not None else None
+    for sidelabel, p_model, odds, fair in (
+        ("Over", p_over, over_odds, fair_over),
+        ("Under", p_under, under_odds, fair_under)):
+        if odds is None:
+            continue
+        payout = E.american_to_decimal_profit(odds)
+        ev = p_model * payout - (1 - p_model)
+        edge = p_model - (fair if fair is not None else E.american_to_implied(odds))
+        results.append({
+            "Game": row["Game"], "Batter": row["Batter"], "Line": row["Line"],
+            "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
+            "Fair P": round(fair, 3) if fair is not None else None,
+            "Edge": round(edge, 3), "Model EV": round(ev, 3),
+            "Verdict": "VALUE" if edge >= min_edge else ("Lean" if edge >= 0 else "Pass"),
+        })
 
 if results:
-    rdf = pd.DataFrame(results).sort_values("Edge", ascending=False)
-    st.subheader("3 · Ranked edges")
+    rdf = pd.DataFrame(results)
+    only_plays = st.checkbox("Show only +EV sides (hide Pass)", True)
+    if only_plays:
+        rdf = rdf[rdf["Edge"] >= 0]
+    rdf = rdf.sort_values("Edge", ascending=False)
+    st.subheader("3 · Ranked edges — both sides")
     st.dataframe(rdf, use_container_width=True, hide_index=True)
     st.download_button("Download edges (CSV)", rdf.to_csv(index=False),
                        file_name=f"tb_edges_{date.isoformat()}.csv")
