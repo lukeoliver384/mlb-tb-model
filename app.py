@@ -46,6 +46,8 @@ with st.sidebar:
     use_recent = st.checkbox("Blend recent form", True)
     recent_days = st.slider("Window (days)", 7, 45, 21, disabled=not use_recent)
     w_recent = st.slider("Weight on recent vs season", 0.0, 1.0, 0.35, 0.05, disabled=not use_recent)
+    use_components = st.checkbox("Per-event log5 (advanced)", True,
+                                help="Project 1B/2B/3B/HR separately via log5, then assemble the TB distribution.")
     method = st.radio("Cover-probability method", ["Exact distribution (recommended)", "Poisson (sheet original)"])
     default_line = st.number_input("Default TB line", 0.5, 5.5, 1.5, 0.5)
     min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
@@ -106,11 +108,14 @@ def project_side(batters, opp_pitcher, venue):
         if b.name.lower() in fg_rates:
             b_rate = fg_rates[b.name.lower()]["tb_per_pa"]
             b_n = fg_rates[b.name.lower()]["pa"]
-        # Recent-form blend (last-N days vs season)
+        # Recent-form blend (last-N days vs season), weight scaled by recent sample
+        b_rate0 = b_rate
         if use_recent and b.recent_pa > 0:
             recent_rate = b.recent_tb / b.recent_pa
-            b_rate = w_recent * recent_rate + (1 - w_recent) * b_rate
+            eff_w = w_recent * b.recent_pa / (b.recent_pa + 50.0)
+            b_rate = eff_w * recent_rate + (1 - eff_w) * b_rate
         # Statcast expected blend (luck factor = est_slg/slg)
+        p_rate0 = p_rate
         if use_statcast and b.mlbam_id in savant_bat:
             b_rate = E.blend(b_rate, b_rate * savant_bat[b.mlbam_id]["luck"], w_statcast)
         if use_statcast and opp_pitcher.mlbam_id in savant_pit:
@@ -130,6 +135,17 @@ def project_side(batters, opp_pitcher, venue):
         pmult = PF.park_mult_hand(venue, side) if use_park else 1.0
         shares = b.hit_shares()
         ht = E.HitTypeShares(*shares) if shares else E.HitTypeShares()
+        ber = per = None
+        if use_components:
+            raw_b = b.event_rates_vs(opp_pitcher.throws)
+            raw_p = opp_pitcher.event_rates_allowed_vs(side)
+            if raw_b and raw_p:
+                b_adj = b_rate / b_rate0 if b_rate0 else 1.0
+                p_adj = p_rate / p_rate0 if p_rate0 else 1.0
+                ber = {ev: E.regress(raw_b[ev], b_n, E.LEAGUE_EVENT_RATES[ev], int(reg_k)) * b_adj
+                       for ev in raw_b}
+                per = {ev: E.regress(raw_p[ev], max(opp_pitcher.bf, 1), E.LEAGUE_EVENT_RATES[ev], int(reg_k)) * p_adj
+                       for ev in raw_p}
         inp = E.ProjectionInput(
             batter_tb_per_pa=b_rate, batter_pa_sample=b_n,
             pitcher_tb_per_pa_allowed=p_rate, pitcher_bf_sample=max(opp_pitcher.bf, 1),
@@ -137,6 +153,7 @@ def project_side(batters, opp_pitcher, venue):
             expected_pa=total_pa, park_mult=pmult,
             shares=ht, sp_share=this_share, bullpen_rate=bullpen_rate,
             league=league_rate, reg_k=int(reg_k),
+            batter_event_rates=ber, pitcher_event_rates=per,
         )
         r = E.project(inp)
         p_cover = r.p_cover if method.startswith("Exact") else r.p_cover_poisson

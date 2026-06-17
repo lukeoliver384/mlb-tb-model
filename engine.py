@@ -19,6 +19,9 @@ from math import exp, factorial
 from typing import Iterable
 
 LEAGUE_TB_PER_PA = 0.355   # sheet E13
+
+# Approximate league per-PA event rates (tune from a league pull each season).
+LEAGUE_EVENT_RATES = {"1B": 0.137, "2B": 0.044, "3B": 0.004, "HR": 0.030}
 REG_K_PA = 175             # sheet E12 (regression constant, in PA)
 
 
@@ -163,6 +166,39 @@ def single_pa_pmf(tb_per_pa: float, shares: HitTypeShares) -> list[float]:
     ]
 
 
+def component_log5_pmf(b_rates: dict, p_rates: dict,
+                       league_rates: dict = None,
+                       park_event_mult: dict = None,
+                       park_mult: float = 1.0) -> list[float]:
+    """
+    Per-PA total-bases distribution built from PER-EVENT log5.
+
+    Instead of one aggregate TB/PA rate, log5 each hit type separately
+    (1B/2B/3B/HR) from the batter's and pitcher's per-PA event rates, so platoon
+    and park effects act on each event correctly. Returns [P0, P1B, P2B, P3B, PHR].
+
+    b_rates / p_rates: dict event -> per-PA (or per-BF) probability.
+    park_event_mult: optional per-event park multipliers; else `park_mult` applied to all.
+    """
+    league_rates = league_rates or LEAGUE_EVENT_RATES
+    probs = {}
+    for e in ("1B", "2B", "3B", "HR"):
+        be, pe, le = b_rates.get(e, 0.0), p_rates.get(e, 0.0), league_rates[e]
+        if be <= 0 or pe <= 0 or le <= 0:
+            p = be if be > 0 else le      # graceful fallback
+        else:
+            p = log5_rate(be, pe, le)
+        pm = (park_event_mult or {}).get(e, park_mult)
+        probs[e] = max(0.0, p * pm)
+    total_hit = sum(probs.values())
+    if total_hit > 0.95:                  # guard against impossible PAs
+        scale = 0.95 / total_hit
+        for e in probs:
+            probs[e] *= scale
+        total_hit = 0.95
+    return [1 - total_hit, probs["1B"], probs["2B"], probs["3B"], probs["HR"]]
+
+
 def _convolve(a: list[float], b: list[float]) -> list[float]:
     out = [0.0] * (len(a) + len(b) - 1)
     for i, ai in enumerate(a):
@@ -241,6 +277,9 @@ class ProjectionInput:
     shares: HitTypeShares = field(default_factory=HitTypeShares)
     sp_share: float = 1.0                 # 1.0 = ignore bullpen (sheet behaviour)
     bullpen_rate: "float | None" = None   # league-avg reliever TB/BF for non-SP PAs
+    batter_event_rates: "dict | None" = None   # {"1B":..,"2B":..,"3B":..,"HR":..} per PA
+    pitcher_event_rates: "dict | None" = None  # allowed per BF, vs this batter's hand
+    park_event_mult: "dict | None" = None      # optional per-event park factors
     league: float = LEAGUE_TB_PER_PA
     reg_k: float = REG_K_PA
     use_regression: bool = True
@@ -267,13 +306,27 @@ def project(inp: ProjectionInput) -> ProjectionResult:
     p = regress(inp.pitcher_tb_per_pa_allowed, inp.pitcher_bf_sample, inp.league, inp.reg_k) \
         if inp.use_regression else inp.pitcher_tb_per_pa_allowed
 
-    matchup = log5_rate(b, p, inp.league) * inp.park_mult
-    lam = matchup * inp.expected_pa
+    if inp.batter_event_rates and inp.pitcher_event_rates:
+        # ---- per-event (component) log5 path ----
+        pmf_sp = component_log5_pmf(inp.batter_event_rates, inp.pitcher_event_rates,
+                                    park_event_mult=inp.park_event_mult,
+                                    park_mult=inp.park_mult)
+        # bullpen: scale league event rates to the bullpen TB level, still log5 vs batter
+        pen_scale = (inp.bullpen_rate if inp.bullpen_rate else inp.league) / inp.league
+        pen_event = {e: r * pen_scale for e, r in LEAGUE_EVENT_RATES.items()}
+        pmf_pen = component_log5_pmf(inp.batter_event_rates, pen_event,
+                                     park_event_mult=inp.park_event_mult,
+                                     park_mult=inp.park_mult)
+        matchup = sum(i * pmf_sp[i] for i in range(1, 5))   # expected TB/PA vs starter
+    else:
+        # ---- aggregate TB/PA path (original) ----
+        matchup = log5_rate(b, p, inp.league) * inp.park_mult
+        pmf_sp = single_pa_pmf(matchup, inp.shares)
+        pen_rate = (inp.bullpen_rate if inp.bullpen_rate else inp.league) * inp.park_mult
+        pmf_pen = single_pa_pmf(pen_rate, inp.shares)
 
-    pmf_sp = single_pa_pmf(matchup, inp.shares)
-    pen_rate = (inp.bullpen_rate if inp.bullpen_rate else inp.league) * inp.park_mult
-    pmf_pen = single_pa_pmf(pen_rate, inp.shares)  # bullpen for later PAs
     dist = tb_distribution(inp.expected_pa, pmf_sp, pmf_pen, inp.sp_share)
+    lam = sum(tb * pdist for tb, pdist in enumerate(dist))   # mean of final distribution
 
     p_cover = p_cover_from_dist(dist, inp.line, inp.side)
     p_pois = p_cover_poisson(lam, inp.line, inp.side)

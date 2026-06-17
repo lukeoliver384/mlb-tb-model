@@ -40,6 +40,20 @@ class Pitcher:
     tb_per_bf_vs_l: float = 0.0
     tb_per_bf_vs_r: float = 0.0
     games_started: float = 0.0
+    h_allowed: float = 0.0
+    d_allowed: float = 0.0
+    t_allowed: float = 0.0
+    hr_allowed: float = 0.0
+    bf_vs_l: float = 0.0
+    h_vs_l: float = 0.0
+    d_vs_l: float = 0.0
+    t_vs_l: float = 0.0
+    hr_vs_l: float = 0.0
+    bf_vs_r: float = 0.0
+    h_vs_r: float = 0.0
+    d_vs_r: float = 0.0
+    t_vs_r: float = 0.0
+    hr_vs_r: float = 0.0
 
     @property
     def tb_per_bf(self) -> float:
@@ -48,6 +62,19 @@ class Pitcher:
     @property
     def bf_per_start(self) -> float:
         return self.bf / self.games_started if self.games_started else 0.0
+
+    def event_rates_allowed_vs(self, bat_side: str):
+        """Per-BF {1B,2B,3B,HR} allowed vs batter side; falls back to overall."""
+        if bat_side.upper() in ("L", "S") and self.bf_vs_l >= 50:
+            bf, h, d, t, hr = self.bf_vs_l, self.h_vs_l, self.d_vs_l, self.t_vs_l, self.hr_vs_l
+        elif bat_side.upper() == "R" and self.bf_vs_r >= 50:
+            bf, h, d, t, hr = self.bf_vs_r, self.h_vs_r, self.d_vs_r, self.t_vs_r, self.hr_vs_r
+        else:
+            bf, h, d, t, hr = self.bf, self.h_allowed, self.d_allowed, self.t_allowed, self.hr_allowed
+        if bf <= 0:
+            return None
+        singles = h - d - t - hr
+        return {"1B": singles/bf, "2B": d/bf, "3B": t/bf, "HR": hr/bf}
 
 
 @dataclass
@@ -68,6 +95,15 @@ class Batter:
     hr: float = 0.0
     recent_pa: float = 0.0
     recent_tb: float = 0.0
+    # per-hand hit components (h, 2b, 3b, hr) for component log5
+    h_vs_l: float = 0.0
+    d_vs_l: float = 0.0
+    t_vs_l: float = 0.0
+    hr_vs_l: float = 0.0
+    h_vs_r: float = 0.0
+    d_vs_r: float = 0.0
+    t_vs_r: float = 0.0
+    hr_vs_r: float = 0.0
 
     @property
     def tb_per_pa(self) -> float:
@@ -87,6 +123,21 @@ class Batter:
             return None
         return (self.single / hits, self.double / hits,
                 self.triple / hits, self.hr / hits)
+
+    def event_rates_vs(self, throws: str):
+        """Per-PA {1B,2B,3B,HR} vs the pitcher's hand; falls back to overall."""
+        if throws.upper() == "L" and self.pa_vs_l >= 30:
+            pa, h, d, t, hr = self.pa_vs_l, self.h_vs_l, self.d_vs_l, self.t_vs_l, self.hr_vs_l
+        elif throws.upper() == "R" and self.pa_vs_r >= 30:
+            pa, h, d, t, hr = self.pa_vs_r, self.h_vs_r, self.d_vs_r, self.t_vs_r, self.hr_vs_r
+        else:
+            pa = self.pa
+            h = self.single + self.double + self.triple + self.hr
+            d, t, hr = self.double, self.triple, self.hr
+        if pa <= 0:
+            return None
+        singles = h - d - t - hr
+        return {"1B": singles/pa, "2B": d/pa, "3B": t/pa, "HR": hr/pa}
 
 
 @dataclass
@@ -183,9 +234,13 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
             if code == "vl":
                 b.pa_vs_l = float(st.get("plateAppearances", 0))
                 b.tb_vs_l = float(st.get("totalBases", 0))
+                b.h_vs_l = float(st.get("hits", 0)); b.d_vs_l = float(st.get("doubles", 0))
+                b.t_vs_l = float(st.get("triples", 0)); b.hr_vs_l = float(st.get("homeRuns", 0))
             elif code == "vr":
                 b.pa_vs_r = float(st.get("plateAppearances", 0))
                 b.tb_vs_r = float(st.get("totalBases", 0))
+                b.h_vs_r = float(st.get("hits", 0)); b.d_vs_r = float(st.get("doubles", 0))
+                b.t_vs_r = float(st.get("triples", 0)); b.hr_vs_r = float(st.get("homeRuns", 0))
     except Exception:
         pass
     if not b.bats:
@@ -206,6 +261,8 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
         p.tb_allowed = _tb_allowed(st)
         p.bf = float(st.get("battersFaced", 0))
         p.games_started = float(st.get("gamesStarted", 0))
+        p.h_allowed = float(st.get("hits", 0)); p.d_allowed = float(st.get("doubles", 0))
+        p.t_allowed = float(st.get("triples", 0)); p.hr_allowed = float(st.get("homeRuns", 0))
     except Exception:
         pass
     try:
@@ -216,8 +273,14 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
             bf = float(st.get("battersFaced", 0)) or 1
             if code == "vl":
                 p.tb_per_bf_vs_l = _tb_allowed(st) / bf
+                p.bf_vs_l = float(st.get("battersFaced", 0))
+                p.h_vs_l = float(st.get("hits", 0)); p.d_vs_l = float(st.get("doubles", 0))
+                p.t_vs_l = float(st.get("triples", 0)); p.hr_vs_l = float(st.get("homeRuns", 0))
             elif code == "vr":
                 p.tb_per_bf_vs_r = _tb_allowed(st) / bf
+                p.bf_vs_r = float(st.get("battersFaced", 0))
+                p.h_vs_r = float(st.get("hits", 0)); p.d_vs_r = float(st.get("doubles", 0))
+                p.t_vs_r = float(st.get("triples", 0)); p.hr_vs_r = float(st.get("homeRuns", 0))
     except Exception:
         pass
     return p
