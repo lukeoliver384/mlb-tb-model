@@ -30,6 +30,9 @@ BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "line", "side", "prop",
                "odds", "stake", "actual", "result", "profit", "graded"]
 BET_CSV = "tracker_bets.csv"
 
+ODDS_COLUMNS = ["date", "prop", "game", "batter", "over", "under"]
+ODDS_CSV = "tracker_odds.csv"
+
 
 # --------------------------------------------------------------------------- #
 # Storage backend                                                             #
@@ -364,3 +367,72 @@ def bankroll_stats(curve: pd.DataFrame, start: float = 100.0) -> dict:
         "peak": bk.max(),
         "max_drawdown_pct": dd.min() * 100,  # most negative
     }
+
+
+# --------------------------------------------------------------------------- #
+# Odds persistence (survives tab refresh / restart)                           #
+# --------------------------------------------------------------------------- #
+def _odds_ws():
+    ws = _gsheet()
+    if not ws:
+        return None
+    try:
+        sh = ws.spreadsheet
+        try:
+            ows = sh.worksheet("odds")
+        except Exception:
+            ows = sh.add_worksheet(title="odds", rows=4000, cols=len(ODDS_COLUMNS))
+        if not ows.row_values(1):
+            ows.append_row(ODDS_COLUMNS)
+        return ows
+    except Exception:
+        return None
+
+
+def read_odds() -> dict:
+    """Return {(date, prop, game, batter): {"over":..,"under":..}} from storage."""
+    rows = None
+    ws = _odds_ws()
+    if ws:
+        try:
+            rows = ws.get_all_records()
+        except Exception:
+            rows = None
+    if rows is None and "odds_rows" in st.session_state:
+        rows = st.session_state["odds_rows"]
+    if rows is None and os.path.exists(ODDS_CSV):
+        try:
+            rows = pd.read_csv(ODDS_CSV).to_dict("records")
+        except Exception:
+            rows = None
+    out = {}
+    for r in (rows or []):
+        k = (str(r.get("date", "")), str(r.get("prop", "")),
+             str(r.get("game", "")), str(r.get("batter", "")))
+        rec = {}
+        if str(r.get("over", "")).strip():
+            rec["over"] = str(r["over"]).strip()
+        if str(r.get("under", "")).strip():
+            rec["under"] = str(r["under"]).strip()
+        if rec:
+            out[k] = rec
+    return out
+
+
+def write_odds(store: dict) -> str:
+    rows = [[d, prop, game, batter, rec.get("over", ""), rec.get("under", "")]
+            for (d, prop, game, batter), rec in store.items()]
+    ws = _odds_ws()
+    if ws:
+        try:
+            ws.clear()
+            ws.update([ODDS_COLUMNS] + rows)
+            return "Google Sheet"
+        except Exception:
+            pass
+    st.session_state["odds_rows"] = [dict(zip(ODDS_COLUMNS, r)) for r in rows]
+    try:
+        pd.DataFrame(rows, columns=ODDS_COLUMNS).to_csv(ODDS_CSV, index=False)
+    except Exception:
+        pass
+    return "local"

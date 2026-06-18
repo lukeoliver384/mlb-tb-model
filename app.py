@@ -329,6 +329,12 @@ st.caption("Enter the Over and/or Under price (American) for each batter. The mo
            "and surfaces whichever is +EV — so hitters that project under the line show up as Under value. "
            "If you enter both prices, the market is de-vigged for a cleaner edge.")
 odds_store = st.session_state.setdefault("odds_store", {})
+if not st.session_state.get("_odds_loaded"):
+    try:
+        odds_store.update(T.read_odds())
+    except Exception:
+        pass
+    st.session_state["_odds_loaded"] = True
 
 def _okey(game, batter):
     return (date.isoformat(), STAT, str(game), str(batter))
@@ -371,6 +377,16 @@ for _, _r in edited.iterrows():
         rec["under"] = _u
     if rec:
         odds_store[_okey(_r["Game"], _r["Batter"])] = rec
+    else:
+        odds_store.pop(_okey(_r["Game"], _r["Batter"]), None)
+import json as _json
+_oh = _json.dumps({"|".join(k): v for k, v in sorted(odds_store.items())}, sort_keys=True)
+if _oh != st.session_state.get("_odds_hash"):
+    try:
+        T.write_odds(odds_store)
+    except Exception:
+        pass
+    st.session_state["_odds_hash"] = _oh
 
 def _num(x):
     if x is None or (isinstance(x, float) and pd.isna(x)):
