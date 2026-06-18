@@ -25,14 +25,14 @@ html, body, [class*="css"], [class*="st-"] { font-family: 'Inter', -apple-system
 footer {display: none;}
 .block-container {padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1320px;}
 h1, h2, h3 {font-weight: 600; letter-spacing: -0.015em;}
-[data-testid="stMetric"] {background: #F7F8FA; border: 1px solid #ECEEF1;
+[data-testid="stMetric"] {background: #161B22; border: 1px solid #262C36;
     border-radius: 12px; padding: 14px 18px;}
-[data-testid="stMetricValue"] {font-size: 1.55rem; font-weight: 600;}
-[data-testid="stMetricLabel"] {color: #6B7280;}
-section[data-testid="stSidebar"] {background: #FBFBFC; border-right: 1px solid #EEF0F3;}
+[data-testid="stMetricValue"] {font-size: 1.55rem; font-weight: 600; color: #F2F4F6;}
+[data-testid="stMetricLabel"] {color: #9AA1AC;}
+section[data-testid="stSidebar"] {background: #11161D; border-right: 1px solid #21262D;}
 section[data-testid="stSidebar"] h2 {font-size: 0.8rem; text-transform: uppercase;
     letter-spacing: 0.06em; color: #8A9099; font-weight: 600; margin-top: 0.4rem;}
-[data-testid="stDataFrame"] {border: 1px solid #ECEEF1; border-radius: 12px;}
+[data-testid="stDataFrame"] {border: 1px solid #262C36; border-radius: 12px;}
 div.stButton > button {border-radius: 8px; font-weight: 600; padding: 0.4rem 1.4rem;}
 hr {margin: 0.6rem 0;}
 </style>""", unsafe_allow_html=True)
@@ -41,7 +41,7 @@ st.markdown("""<div style="display:flex;align-items:center;gap:12px;margin-botto
   <span style="font-size:1.9rem;line-height:1;">⚾</span>
   <div>
     <div style="font-size:1.45rem;font-weight:600;letter-spacing:-0.02em;line-height:1.1;">MLB Total Bases Model</div>
-    <div style="color:#6B7280;font-size:0.88rem;">Daily slate projections · log5 + Statcast · park &amp; weather adjusted</div>
+    <div style="color:#9AA1AC;font-size:0.88rem;">Daily slate projections · log5 + Statcast · park &amp; weather adjusted</div>
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -325,16 +325,19 @@ if results:
     st.subheader("Ranked edges")
 
     def _verdict_style(v):
-        return {"VALUE": "background-color:#E1F5EE;color:#0F6E56;font-weight:600",
-                "Lean": "background-color:#FAEEDA;color:#7a4a08",
-                "Pass": "color:#9AA0A6"}.get(v, "")
+        return {"VALUE": "background-color:#10362C;color:#5DE0BB;font-weight:600",
+                "Lean": "background-color:#3A2E12;color:#E3B341",
+                "Pass": "color:#7A828C"}.get(v, "")
     _pct = lambda x: "—" if pd.isna(x) else f"{x:.0%}"
     _spct = lambda x: "—" if pd.isna(x) else f"{x:+.1%}"
-    styled = (rdf.style
-              .map(_verdict_style, subset=["Verdict"])
-              .format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
-                       "Model EV": _spct, "Odds": lambda x: f"{x:+.0f}"}))
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    try:
+        sty = rdf.style.format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
+                                "Model EV": _spct, "Odds": lambda x: f"{x:+.0f}"})
+        sty = sty.map(_verdict_style, subset=["Verdict"]) if hasattr(sty, "map") \
+            else sty.applymap(_verdict_style, subset=["Verdict"])
+        st.dataframe(sty, use_container_width=True, hide_index=True)
+    except Exception:
+        st.dataframe(rdf, use_container_width=True, hide_index=True)
     st.download_button("Download edges (CSV)", rdf.to_csv(index=False),
                        file_name=f"tb_edges_{date.isoformat()}.csv")
 
