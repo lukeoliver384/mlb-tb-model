@@ -19,22 +19,17 @@ import data as D
 st.set_page_config(page_title="MLB TB Model", page_icon="⚾", layout="wide")
 
 st.markdown("""<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-html, body, [class*="css"], [class*="st-"] { font-family: 'Inter', -apple-system, sans-serif; }
-#MainMenu, footer {visibility: hidden;}
-footer {display: none;}
-.block-container {padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1320px;}
-h1, h2, h3 {font-weight: 600; letter-spacing: -0.015em;}
+footer {visibility: hidden;}
+.block-container {max-width: 1320px;}
+h1, h2, h3 {font-weight: 600; letter-spacing: -0.01em;}
 [data-testid="stMetric"] {background: #161B22; border: 1px solid #262C36;
     border-radius: 12px; padding: 14px 18px;}
-[data-testid="stMetricValue"] {font-size: 1.55rem; font-weight: 600; color: #F2F4F6;}
+[data-testid="stMetricValue"] {font-weight: 600; color: #F2F4F6;}
 [data-testid="stMetricLabel"] {color: #9AA1AC;}
-section[data-testid="stSidebar"] {background: #11161D; border-right: 1px solid #21262D;}
 section[data-testid="stSidebar"] h2 {font-size: 0.8rem; text-transform: uppercase;
-    letter-spacing: 0.06em; color: #8A9099; font-weight: 600; margin-top: 0.4rem;}
+    letter-spacing: 0.06em; color: #8A9099; font-weight: 600;}
 [data-testid="stDataFrame"] {border: 1px solid #262C36; border-radius: 12px;}
-div.stButton > button {border-radius: 8px; font-weight: 600; padding: 0.4rem 1.4rem;}
-hr {margin: 0.6rem 0;}
+div.stButton > button {border-radius: 8px; font-weight: 600;}
 </style>""", unsafe_allow_html=True)
 
 st.markdown(
