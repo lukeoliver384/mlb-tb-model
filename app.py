@@ -581,10 +581,10 @@ if results:
                 stake = float(r["Stake (u)"])
             except (ValueError, TypeError):
                 stake = 1.0
-            bid, pitch = bid_map.get((r["Game"], r["Batter"]), (0, ""))
+            bid, pitch, ven = bid_map.get((r["Game"], r["Batter"]), (0, "", ""))
             brows.append({"date": date.isoformat(), "batter": r["Batter"], "batter_id": bid,
-                          "pitcher": pitch, "line": r["Line"], "side": r["Side"],
-                          "odds": r["Odds"], "stake": stake})
+                          "pitcher": pitch, "venue": ven, "line": r["Line"], "side": r["Side"],
+                          "odds": r["Odds"], "stake": stake, "prop": STAT})
         if brows:
             try:
                 nb = T.log_bets(pd.DataFrame(brows))
