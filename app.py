@@ -332,15 +332,22 @@ odds_store = st.session_state.setdefault("odds_store", {})
 def _okey(game, batter):
     return (date.isoformat(), STAT, str(game), str(batter))
 
-odds_df = df[["Game", "Batter", "Line", "P(Over)"]].copy()
-odds_df["Over odds"] = [odds_store.get(_okey(g, b), {}).get("over", "")
-                        for g, b in zip(odds_df["Game"], odds_df["Batter"])]
-odds_df["Under odds"] = [odds_store.get(_okey(g, b), {}).get("under", "")
-                         for g, b in zip(odds_df["Game"], odds_df["Batter"])]
-edited = st.data_editor(odds_df, use_container_width=True, hide_index=True,
-                        disabled=["Game", "Batter", "Line", "P(Over)"],
-                        key=f"odds_editor_{date.isoformat()}_{STAT}")
-# Remember entered odds so reloading the slate doesn't wipe them
+# Stateful editor: build the table once per date+prop (pre-filled from the saved
+# store), then let the editor own its state. Don't rebuild it every rerun, or
+# in-progress edits get reverted.
+_ekey = f"odds_tbl_{date.isoformat()}_{STAT}"
+if go or _ekey not in st.session_state:
+    base = df[["Game", "Batter", "Line", "P(Over)"]].copy()
+    base["Over odds"] = [odds_store.get(_okey(g, b), {}).get("over", "")
+                         for g, b in zip(base["Game"], base["Batter"])]
+    base["Under odds"] = [odds_store.get(_okey(g, b), {}).get("under", "")
+                          for g, b in zip(base["Game"], base["Batter"])]
+    st.session_state[_ekey] = base
+
+edited = st.data_editor(st.session_state[_ekey], use_container_width=True, hide_index=True,
+                        disabled=["Game", "Batter", "Line", "P(Over)"])
+st.session_state[_ekey] = edited   # persist edits within the session
+# also mirror into the cross-date store
 for _, _r in edited.iterrows():
     _o, _u = str(_r["Over odds"]).strip(), str(_r["Under odds"]).strip()
     if _o or _u:
