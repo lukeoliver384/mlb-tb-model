@@ -367,7 +367,7 @@ def _summary(row):
 
 _strong = df.copy()
 _strong["_lean"] = _strong["P(Over)"].apply(lambda p: max(float(p), 1 - float(p)))
-_strong = _strong[_strong["_lean"] >= 0.57].sort_values("_lean", ascending=False).head(20)
+_strong = _strong[_strong["_lean"] >= 0.56].sort_values("_lean", ascending=False).head(3)
 if _strong.empty:
     st.caption("No strong leans on this slate (no side at 57%+).")
 else:
@@ -504,6 +504,21 @@ if results:
     if only_plays:
         rdf = rdf[rdf["Edge"] >= 0]
     rdf = rdf.sort_values("Edge", ascending=False)
+    _cmap = {(r["Game"], r["Batter"]): r.get("Conf", 3) for _, r in df.iterrows()}
+    rdf["Conf"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
+
+    _val = rdf[rdf["Edge"] > 0].head(5)
+    if not _val.empty:
+        st.subheader("Top 5 value plays")
+        st.caption("Highest edge vs the market you entered, with data-confidence stars.")
+        _vshow = _val[["Batter", "Side", "Line", "Odds", "Edge", "Kelly %", "Conf"]].copy()
+        st.dataframe(_vshow, use_container_width=True, hide_index=True,
+                     column_config={
+                         "Odds": st.column_config.NumberColumn("Odds", format="%+d"),
+                         "Edge": st.column_config.NumberColumn("Edge", format="%+.1f%%"),
+                         "Kelly %": st.column_config.NumberColumn("Stake %", format="%.2f%%"),
+                     })
+
     st.subheader("Ranked edges")
 
     def _verdict_style(v):

@@ -60,15 +60,19 @@ def prob_to_american(p: float) -> float:
 
 def confidence_score(batter_pa: float, pitcher_bf: float, split_pa: float,
                      use_splits: bool) -> int:
-    """1-5 score for how well-founded a projection is (sample size + split depth).
-    NOT an edge score — it rates the data behind the number, so a thin-sample
-    projection reads as low confidence even if the point estimate looks strong."""
-    s = 3.0
-    s += 1 if batter_pa >= 350 else (-1 if batter_pa < 120 else 0)
-    s += 0.5 if pitcher_bf >= 300 else (-0.5 if pitcher_bf < 120 else 0)
-    if use_splits and split_pa < 30:      # platoon split too thin, fell back to overall
-        s -= 1
-    return int(max(1, min(5, round(s))))
+    """
+    1-5 data-sufficiency score (NOT an edge/win score). Based on sample
+    reliability via stabilization-style shrinkage: reliability = n/(n+k), with
+    k near where rate stats stabilize (~350 PA for hitters, ~300 BF for pitchers).
+    A thin or missing platoon split discounts it. Maps reliability to 1-5 stars.
+    """
+    rb = batter_pa / (batter_pa + 350.0) if batter_pa else 0.0
+    rp = pitcher_bf / (pitcher_bf + 300.0) if pitcher_bf else 0.0
+    rel = 0.65 * rb + 0.35 * rp                      # ~0 (no data) to ~0.6 (full season)
+    if use_splits and split_pa < 50:                 # platoon split thin / fell back
+        rel *= 0.85
+    stars = 1 + (rel - 0.15) / 0.47 * 4              # rel .15->1 star, ~.62->5 stars
+    return int(max(1, min(5, round(stars))))
 
 
 def no_vig_two_way(over_odds: float, under_odds: float) -> tuple[float, float]:
