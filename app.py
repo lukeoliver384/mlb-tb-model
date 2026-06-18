@@ -89,10 +89,8 @@ with st.sidebar:
                            help="Fraction of full Kelly to stake. Default 0.25 = quarter Kelly. Stakes are % of bankroll.")
     max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, 5.0, 0.5,
                                 help="Hard cap on any single bet, applied AFTER Kelly fractioning. Guards against model overconfidence.")
-    conf_shrink = st.slider("Shrink toward market", 0.0, 0.6, 0.25, 0.05,
-                            help="Pulls the model probability toward the market price before sizing. 0 = trust model fully; higher = defer more to a sharp line. Tones down overconfidence.")
-    edge_cap = st.slider("Cap edge for sizing (pts)", 0.05, 0.30, 0.15, 0.01,
-                         help="Hard backstop after the shrink: max model-vs-market edge used for Kelly.")
+    conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, 0.0, 0.05,
+                            help="Optional: pulls the model probability toward the market before sizing. 0 = off (stake reflects the model's cover probability directly).")
 
     st.caption("Fangraphs CSV (optional) — overrides MLB-API batter TB/PA")
     fg_csv = st.file_uploader("Fangraphs batting export (.csv)", type=["csv"])
@@ -485,9 +483,11 @@ for _, row in edited.iterrows():
         payout = E.american_to_decimal_profit(odds)
         ev = p_model * payout - (1 - p_model)
         edge = p_model - (fair if fair is not None else E.american_to_implied(odds))
-        _mkt = fair if fair is not None else E.american_to_implied(odds)
-        _p_shrunk = (1 - conf_shrink) * p_model + conf_shrink * _mkt   # tone toward market
-        _p_size = min(_p_shrunk, _mkt + edge_cap)                      # hard edge backstop
+        if conf_shrink > 0:
+            _mkt = fair if fair is not None else E.american_to_implied(odds)
+            _p_size = (1 - conf_shrink) * p_model + conf_shrink * _mkt
+        else:
+            _p_size = p_model
         kel = min(E.kelly_fraction(_p_size, odds) * kelly_mult, max_stake / 100.0)
         results.append({
             "Game": row["Game"], "Batter": row["Batter"], "Line": row["Line"],
