@@ -268,7 +268,8 @@ def matchup_weather(mu):
 
 # Compute projections ONLY when the slate is (re)loaded, then freeze them in the
 # session so reruns (typing odds, logging bets) and forecast updates don't move them.
-if go or st.session_state.get("proj_df") is None:
+_proj_stale = st.session_state.get("proj_meta") != (date.isoformat(), STAT)
+if go or st.session_state.get("proj_df") is None or _proj_stale:
     all_rows = []
     for mu in slate:
         wm, wx = matchup_weather(mu)
@@ -318,7 +319,7 @@ st.dataframe(
         "vs Pitcher": st.column_config.TextColumn("vs Pitcher", width="medium"),
         "vsSP%": st.column_config.NumberColumn("vs SP", format="%d%%", help="Share of PAs vs the starter"),
         proj_col: st.column_config.NumberColumn(proj_col, format="%.2f"),
-        "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.0f%%"),
+        "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.1f%%"),
         "Fair Over odds": st.column_config.NumberColumn("Fair Over", format="%+d"),
         "Wx": st.column_config.TextColumn("Weather"),
     })
@@ -340,12 +341,16 @@ def _pf(g, b, side):
 
 _basekey = f"odds_base_{date.isoformat()}_{STAT}"
 _edkey = f"odds_ed_{date.isoformat()}_{STAT}"
-if go or _basekey not in st.session_state:
+_odds_active = (date.isoformat(), STAT)
+# Rebuild (pre-filled from the saved store) on load OR whenever prop/date changes,
+# so switching props restores each prop's saved odds. Stable within a prop so edits don't revert.
+if go or _basekey not in st.session_state or st.session_state.get("_odds_active") != _odds_active:
     base = df[["Game", "Batter", "Line", "P(Over)"]].copy()
     base["Over odds"] = pd.Series([_pf(g, b, "over") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
     base["Under odds"] = pd.Series([_pf(g, b, "under") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
     st.session_state[_basekey] = base
     st.session_state.pop(_edkey, None)
+st.session_state["_odds_active"] = _odds_active
 
 edited = st.data_editor(
     st.session_state[_basekey], key=_edkey,
@@ -419,7 +424,7 @@ if results:
         return {"VALUE": "background-color:#10362C;color:#5DE0BB;font-weight:600",
                 "Lean": "background-color:#3A2E12;color:#E3B341",
                 "Pass": "color:#7A828C"}.get(v, "")
-    _pct = lambda x: "—" if pd.isna(x) else f"{x:.0%}"
+    _pct = lambda x: "—" if pd.isna(x) else f"{x:.1%}"
     _spct = lambda x: "—" if pd.isna(x) else f"{x:+.1%}"
     try:
         sty = rdf.style.format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
