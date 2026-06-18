@@ -30,7 +30,7 @@ BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "side"
                "odds", "stake", "actual", "result", "profit", "graded"]
 BET_CSV = "tracker_bets.csv"
 
-ODDS_COLUMNS = ["date", "prop", "game", "batter", "over", "under"]
+ODDS_COLUMNS = ["date", "prop", "game", "batter", "line", "over", "under"]
 ODDS_CSV = "tracker_odds.csv"
 
 
@@ -424,6 +424,8 @@ def read_odds() -> dict:
         k = (str(r.get("date", "")), str(r.get("prop", "")),
              str(r.get("game", "")), str(r.get("batter", "")))
         rec = {}
+        if str(r.get("line", "")).strip():
+            rec["line"] = str(r["line"]).strip()
         if str(r.get("over", "")).strip():
             rec["over"] = str(r["over"]).strip()
         if str(r.get("under", "")).strip():
@@ -434,7 +436,7 @@ def read_odds() -> dict:
 
 
 def write_odds(store: dict) -> str:
-    rows = [[d, prop, game, batter, rec.get("over", ""), rec.get("under", "")]
+    rows = [[d, prop, game, batter, rec.get("line", ""), rec.get("over", ""), rec.get("under", "")]
             for (d, prop, game, batter), rec in store.items()]
     ws = _odds_ws()
     if ws:

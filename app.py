@@ -189,6 +189,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
                 "_matchup": round(lam / total_pa, 3) if total_pa else 0,
                 "_exp_pa": round(total_pa, 2), "_park": round(pmult, 3),
                 "_bpa": round(b.pa), "_pbf": round(opp_pitcher.bf), "_recent": None,
+                "_dist": None, "_lam": round(lam, 4),
             })
             continue
 
@@ -257,6 +258,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
             "_matchup": round(r.matchup_rate, 3), "_exp_pa": round(total_pa, 2),
             "_park": round(pmult, 3), "_bpa": round(b_n), "_pbf": round(opp_pitcher.bf),
             "_recent": (round(b.recent_tb / b.recent_pa, 3) if (use_recent and b.recent_pa > 0) else None),
+            "_dist": list(r.distribution), "_lam": round(r.lam, 4),
         })
     return rows
 
@@ -306,6 +308,19 @@ if go or st.session_state.get("proj_df") is None or _proj_stale:
 df = st.session_state["proj_df"]
 bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"], r.get("Venue", ""))
            for _, r in df.iterrows()}
+dist_map = {(r["Game"], r["Batter"]): r.get("_dist") for _, r in df.iterrows()}
+lam_map = {(r["Game"], r["Batter"]): r.get("_lam") for _, r in df.iterrows()}
+
+def cover_at(game, batter, line, side="Over"):
+    """Recompute cover prob at an arbitrary line from the stored distribution/lam."""
+    k = (game, batter)
+    d = dist_map.get(k)
+    if d is not None:
+        return E.p_cover_from_dist(list(d), line, side)
+    lam = lam_map.get(k)
+    if lam is not None:
+        return E.p_cover_poisson(float(lam), line, side)
+    return None
 _fd, _fs = st.session_state.get("proj_meta", ("", STAT))
 st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
            "Change settings or date? Click **Load slate** to recompute.")
@@ -435,7 +450,10 @@ edited = st.data_editor(
 for _, _r in edited.iterrows():
     _o = str(_r["Over odds"] or "").strip()
     _u = str(_r["Under odds"] or "").strip()
+    _l = _r.get("Line")
     rec = {}
+    if _l is not None and not pd.isna(_l) and float(_l) != float(default_line):
+        rec["line"] = float(_l)
     if _o:
         rec["over"] = _o
     if _u:
@@ -467,7 +485,10 @@ for _, row in edited.iterrows():
     over_odds, under_odds = _num(row["Over odds"]), _num(row["Under odds"])
     if over_odds is None and under_odds is None:
         continue
-    p_over = float(row["P(Over)"])
+    line = _num(row["Line"]) or default_line
+    p_over = cover_at(row["Game"], row["Batter"], line, "Over")
+    if p_over is None:
+        continue
     p_under = 1 - p_over
     # Fair market probs: de-vig if both prices present, else use the single implied price
     if over_odds is not None and under_odds is not None:
@@ -490,7 +511,7 @@ for _, row in edited.iterrows():
             _p_size = p_model
         kel = min(E.kelly_fraction(_p_size, odds) * kelly_mult, max_stake / 100.0)
         results.append({
-            "Game": row["Game"], "Batter": row["Batter"], "Line": row["Line"],
+            "Game": row["Game"], "Batter": row["Batter"], "Line": line,
             "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
             "Fair P": round(fair, 3) if fair is not None else None,
             "Edge": round(edge, 3), "Model EV": round(ev, 3),
