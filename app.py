@@ -335,29 +335,47 @@ def _okey(game, batter):
 # Canonical stateful data_editor: a STABLE base (rebuilt only on load) + a fixed
 # key; edits live in the widget and come back via the return value. We never write
 # the output back into the base, which is what caused the revert before.
+def _pf(g, b, side):
+    v = odds_store.get(_okey(g, b), {}).get(side, None)
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
 _basekey = f"odds_base_{date.isoformat()}_{STAT}"
 _edkey = f"odds_ed_{date.isoformat()}_{STAT}"
 if go or _basekey not in st.session_state:
     base = df[["Game", "Batter", "Line", "P(Over)"]].copy()
-    base["Over odds"] = [odds_store.get(_okey(g, b), {}).get("over", "")
-                         for g, b in zip(base["Game"], base["Batter"])]
-    base["Under odds"] = [odds_store.get(_okey(g, b), {}).get("under", "")
-                          for g, b in zip(base["Game"], base["Batter"])]
+    base["Over odds"] = pd.Series([_pf(g, b, "over") for g, b in zip(base["Game"], base["Batter"])], dtype="float64")
+    base["Under odds"] = pd.Series([_pf(g, b, "under") for g, b in zip(base["Game"], base["Batter"])], dtype="float64")
     st.session_state[_basekey] = base
-    st.session_state.pop(_edkey, None)          # clear stale edit deltas on reload
+    st.session_state.pop(_edkey, None)
 
-edited = st.data_editor(st.session_state[_basekey], key=_edkey,
-                        use_container_width=True, hide_index=True,
-                        disabled=["Game", "Batter", "Line", "P(Over)"])
+edited = st.data_editor(
+    st.session_state[_basekey], key=_edkey,
+    use_container_width=True, hide_index=True,
+    disabled=["Game", "Batter", "Line", "P(Over)"],
+    column_config={
+        "Over odds": st.column_config.NumberColumn("Over odds", format="%d", step=5),
+        "Under odds": st.column_config.NumberColumn("Under odds", format="%d", step=5),
+    })
 # mirror entered odds into the cross-date store (read-only; does not feed the base)
 for _, _r in edited.iterrows():
-    _o, _u = str(_r["Over odds"]).strip(), str(_r["Under odds"]).strip()
-    if _o or _u:
-        odds_store[_okey(_r["Game"], _r["Batter"])] = {"over": _o, "under": _u}
+    _o, _u = _r["Over odds"], _r["Under odds"]
+    rec = {}
+    if pd.notna(_o):
+        rec["over"] = float(_o)
+    if pd.notna(_u):
+        rec["under"] = float(_u)
+    if rec:
+        odds_store[_okey(_r["Game"], _r["Batter"])] = rec
 
 def _num(x):
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return None
     try:
-        return float(str(x).strip())
+        v = float(str(x).strip())
+        return None if pd.isna(v) else v
     except (ValueError, TypeError):
         return None
 
