@@ -398,6 +398,18 @@ def load_fangraphs_csv(path_or_buffer):
 # --------------------------------------------------------------------------- #
 # Recent form (MLB StatsAPI byDateRange)                                       #
 # --------------------------------------------------------------------------- #
+def player_tb_on_date(pid: int, season: int, date: str):
+    """Actual total bases for a player on a given date (YYYY-MM-DD). None if DNP/missing."""
+    try:
+        d = _get(f"{STATSAPI}/people/{pid}/stats",
+                 stats="byDateRange", group="hitting", season=season, sportId=1,
+                 startDate=date, endDate=date)
+        st = d["stats"][0]["splits"][0]["stat"]
+        return float(st.get("totalBases", 0))
+    except Exception:
+        return None
+
+
 def fill_recent_form(b: Batter, season: int, days: int = 21) -> Batter:
     """Last-N-days TB/PA via byDateRange. Stored on b.recent_pa / b.recent_tb."""
     end = dt.date.today()

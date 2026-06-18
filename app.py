@@ -15,6 +15,7 @@ import streamlit as st
 import engine as E
 import park_factors as PF
 import data as D
+import tracker as T
 
 st.set_page_config(page_title="MLB TB Model", page_icon="⚾", layout="wide")
 
@@ -211,6 +212,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
             "P(Over)": round(p_cover, 3),
             "Fair Over odds": round(E.prob_to_american(p_cover), 0),
             "_b_rate": round(r.batter_rate, 3), "_p_rate": round(r.pitcher_rate, 3),
+            "_bid": b.mlbam_id,
         })
     return rows
 
@@ -373,3 +375,54 @@ with st.expander("Multi-book no-vig fair line calculator (Pinnacle/FD/DK/MGM/Cae
         if res["fair_over"]:
             st.metric("Fair Over probability", f"{res['fair_over']*100:.1f}%",
                       help=f"Fair Over odds ≈ {res['fair_over_american']:+.0f}")
+
+# --------------------------------------------------------------------------- #
+# Accuracy tracker                                                            #
+# --------------------------------------------------------------------------- #
+st.divider()
+st.subheader("Accuracy tracker")
+st.caption(f"Storage: {T.backend_name()}. Log a slate, then grade it after games finish "
+           "to track projection error and calibration over time.")
+
+tc1, tc2 = st.columns(2)
+with tc1:
+    if st.button("Log today's projections"):
+        try:
+            n = T.log_projections(df, date.isoformat())
+            st.success(f"Logged {n} projections for {date.isoformat()}.")
+        except Exception as ex:
+            st.error(f"Log failed: {ex}")
+with tc2:
+    if st.button("Grade past results"):
+        try:
+            n = T.grade(int(season))
+            st.success(f"Graded {n} settled projections.")
+        except Exception as ex:
+            st.error(f"Grade failed: {ex}")
+
+_log = T.read_log()
+_m = T.metrics(_log)
+if _m:
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("Graded", _m["n"])
+    g2.metric("Avg TB error", f"{_m['mae']:.2f}")
+    g3.metric("Bias (proj − actual)", f"{_m['bias']:+.2f}",
+              help="Positive = the model projects too high on average")
+    g4.metric("Over rate: pred vs actual",
+              f"{_m['over_rate_pred']*100:.0f}% / {_m['over_rate_actual']*100:.0f}%")
+    cal = T.calibration(_log)
+    if not cal.empty:
+        st.caption("Calibration — predicted P(Over) vs actual hit rate by bucket")
+        cal_disp = cal.copy()
+        cal_disp["predicted"] = (cal_disp["predicted"] * 100).round(0)
+        cal_disp["actual"] = (cal_disp["actual"] * 100).round(0)
+        cal_disp["gap"] = (cal_disp["gap"] * 100).round(0)
+        st.dataframe(cal_disp, use_container_width=True, hide_index=True,
+                     column_config={
+                         "bucket": "P(Over) bucket",
+                         "predicted": st.column_config.NumberColumn("Predicted", format="%d%%"),
+                         "actual": st.column_config.NumberColumn("Actual", format="%d%%"),
+                         "gap": st.column_config.NumberColumn("Gap", format="%+d pts"),
+                     })
+else:
+    st.info("No graded results yet. Log a slate, and after the games play, click **Grade past results**.")
