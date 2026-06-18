@@ -26,7 +26,7 @@ LOG_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "prop"
                "proj", "p_over", "actual", "over_hit", "graded"]
 LOG_CSV = "tracker_log.csv"
 
-BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "line", "side", "prop",
+BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "side", "prop",
                "odds", "stake", "actual", "result", "profit", "graded"]
 BET_CSV = "tracker_bets.csv"
 
@@ -138,12 +138,19 @@ def grade(season: int) -> int:
     if log.empty:
         return 0
     today = dt.date.today().isoformat()
+    finals = {}
     n = 0
     for i, row in log.iterrows():
         if str(row.get("graded")) in ("1", "1.0", "True"):
             continue
-        if str(row["date"]) >= today:
+        d = str(row["date"])
+        if d > today:
             continue
+        if d == today:  # only grade games already Final
+            if d not in finals:
+                finals[d] = D.final_venues(d)
+            if str(row.get("venue", "")) not in finals[d]:
+                continue
         try:
             bid = int(row["batter_id"])
         except (ValueError, TypeError):
@@ -278,12 +285,19 @@ def grade_bets(season: int) -> int:
     if bets.empty:
         return 0
     today = dt.date.today().isoformat()
+    finals = {}
     n = 0
     for i, row in bets.iterrows():
         if str(row.get("graded")) in ("1", "1.0", "True"):
             continue
-        if str(row["date"]) >= today:
+        d = str(row["date"])
+        if d > today:
             continue
+        if d == today:
+            if d not in finals:
+                finals[d] = D.final_venues(d)
+            if str(row.get("venue", "")) not in finals[d]:
+                continue
         try:
             bid = int(row["batter_id"])
             line = float(row["line"]); odds = float(row["odds"]); stake = float(row["stake"])

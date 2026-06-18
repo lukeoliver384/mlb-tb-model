@@ -425,6 +425,20 @@ def load_fangraphs_csv(path_or_buffer):
 # --------------------------------------------------------------------------- #
 # Recent form (MLB StatsAPI byDateRange)                                       #
 # --------------------------------------------------------------------------- #
+def final_venues(date: str) -> set:
+    """Set of venue names whose games are Final on the given date (for as-you-go grading)."""
+    try:
+        data = _get(f"{STATSAPI}/schedule", sportId=1, date=date)
+        out = set()
+        for d in data.get("dates", []):
+            for g in d.get("games", []):
+                if g.get("status", {}).get("abstractGameState", "") == "Final":
+                    out.add(g.get("venue", {}).get("name", ""))
+        return out
+    except Exception:
+        return set()
+
+
 def player_tb_on_date(pid: int, season: int, date: str):
     """Actual total bases for a player on a given date (YYYY-MM-DD). None if DNP/missing."""
     try:

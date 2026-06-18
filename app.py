@@ -306,7 +306,7 @@ if go or st.session_state.get("proj_df") is None or _proj_stale:
     st.session_state["proj_meta"] = (date.isoformat(), STAT)
 
 df = st.session_state["proj_df"]
-bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"])
+bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"], r.get("Venue", ""))
            for _, r in df.iterrows()}
 _fd, _fs = st.session_state.get("proj_meta", ("", STAT))
 st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
