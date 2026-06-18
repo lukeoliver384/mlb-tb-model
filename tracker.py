@@ -325,3 +325,36 @@ def bet_metrics(bets: pd.DataFrame) -> dict:
         "units_profit": profit,
         "roi": profit / staked if staked else 0.0,
     }
+
+
+def bankroll_curve(bets: pd.DataFrame, start: float = 100.0) -> pd.DataFrame:
+    """
+    Running bankroll from graded bets, compounded in date order. Stakes are %
+    of bankroll (Kelly), so each settled bet multiplies bankroll by (1+profit/100).
+    Returns columns: n, date, bankroll.
+    """
+    g = bets[bets["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    if g.empty:
+        return pd.DataFrame(columns=["n", "date", "bankroll"])
+    g["profit"] = pd.to_numeric(g["profit"], errors="coerce").fillna(0.0)
+    g = g.sort_values("date").reset_index(drop=True)
+    rows, bk = [], float(start)
+    for i, r in g.iterrows():
+        bk *= (1 + float(r["profit"]) / 100.0)
+        rows.append({"n": i + 1, "date": r["date"], "bankroll": round(bk, 3)})
+    return pd.DataFrame(rows)
+
+
+def bankroll_stats(curve: pd.DataFrame, start: float = 100.0) -> dict:
+    if curve.empty:
+        return {}
+    bk = curve["bankroll"]
+    peak = bk.cummax()
+    dd = ((bk - peak) / peak)
+    cur = bk.iloc[-1]
+    return {
+        "current": cur,
+        "growth_pct": (cur / start - 1) * 100,
+        "peak": bk.max(),
+        "max_drawdown_pct": dd.min() * 100,  # most negative
+    }

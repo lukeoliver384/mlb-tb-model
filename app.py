@@ -477,3 +477,15 @@ if _bm:
     b2.metric("Win rate", f"{_bm['win_rate']*100:.0f}%")
     b3.metric("Units P&L", f"{_bm['units_profit']:+.2f}", help=f"{_bm['n']} graded bets, {_bm['units_staked']:.1f}u staked")
     b4.metric("ROI", f"{_bm['roi']*100:+.1f}%")
+
+    start_bk = st.number_input("Starting bankroll (units)", 1.0, 1_000_000.0, 100.0, 10.0,
+                               help="Kelly stakes are % of bankroll, so the curve compounds from here.")
+    curve = T.bankroll_curve(_bets, start_bk)
+    if not curve.empty:
+        bs = T.bankroll_stats(curve, start_bk)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Current bankroll", f"{bs['current']:.1f}", f"{bs['growth_pct']:+.1f}%")
+        c2.metric("Peak", f"{bs['peak']:.1f}")
+        c3.metric("Max drawdown", f"{bs['max_drawdown_pct']:.1f}%")
+        st.line_chart(curve.set_index("n")["bankroll"], height=240,
+                      x_label="settled bets", y_label="bankroll")
