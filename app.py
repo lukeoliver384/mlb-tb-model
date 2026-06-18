@@ -53,6 +53,8 @@ with st.sidebar:
     league_rate = st.number_input("League TB/PA", 0.30, 0.45, E.LEAGUE_TB_PER_PA, 0.001, format="%.3f")
     reg_k = st.number_input("Regression K (PA)", 0, 600, E.REG_K_PA, 5)
     use_splits = st.checkbox("Use L/R handedness splits", True)
+    use_homeaway = st.checkbox("Home/away splits (regressed)", True,
+                               help="Small, heavily-regressed nudge from each player's home vs away TB rate.")
     use_park = st.checkbox("Apply park factors", True)
     park_strength = st.slider("Park factor strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_park,
                               help="Scales how hard park factors push. 0 = ignore parks, 1 = full Savant factor, >1 = amplify.")
@@ -124,7 +126,7 @@ if not slate:
 # --------------------------------------------------------------------------- #
 # Project every batter vs opposing starter                                    #
 # --------------------------------------------------------------------------- #
-def project_side(batters, opp_pitcher, venue, wmult=None):
+def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, pitcher_is_home=False):
     rows = []
     if not opp_pitcher:
         return rows
@@ -152,6 +154,10 @@ def project_side(batters, opp_pitcher, venue, wmult=None):
             b_rate = E.blend(b_rate, b_rate * savant_bat[b.mlbam_id]["luck"], w_statcast)
         if use_statcast and opp_pitcher.mlbam_id in savant_pit:
             p_rate = E.blend(p_rate, p_rate * savant_pit[opp_pitcher.mlbam_id]["luck"], w_statcast)
+        # Home/away (heavily regressed secondary nudge)
+        if use_homeaway:
+            b_rate *= b.home_away_factor(batter_is_home)
+            p_rate *= opp_pitcher.home_away_factor(pitcher_is_home)
         if not b_rate or not p_rate:
             continue
         # Starter/bullpen split
@@ -209,26 +215,32 @@ def project_side(batters, opp_pitcher, venue, wmult=None):
     return rows
 
 def matchup_weather(mu):
-    if not use_weather or not PF.weather_applies(mu.venue):
+    try:
+        if not use_weather or not PF.weather_applies(mu.venue):
+            return None, ""
+        if mu.temp_f is None and mu.wind_mph is None:
+            return None, ""
+        geo = PF.PARK_GEO.get(PF.PARK_ALIASES.get(mu.venue, mu.venue))
+        out = PF.wind_out_component(mu.wind_mph or 0, mu.wind_dir or 0, geo["cf_bearing"]) if geo else 0.0
+        wm = PF.weather_event_mult(mu.temp_f, out, base_temp=PF.park_normal_temp(mu.venue))
+        if weather_strength != 1.0:
+            wm = {k: 1 + (v - 1) * weather_strength for k, v in wm.items()}
+        if mu.temp_f is None:
+            return wm, ""
+        arrow = "out" if out >= 0 else "in"
+        return wm, f"{round(mu.temp_f)}° {abs(round(out))}mph {arrow}"
+    except Exception:
         return None, ""
-    if mu.temp_f is None and mu.wind_mph is None:
-        return None, ""
-    geo = PF.PARK_GEO.get(PF.PARK_ALIASES.get(mu.venue, mu.venue))
-    out = PF.wind_out_component(mu.wind_mph or 0, mu.wind_dir or 0, geo["cf_bearing"]) if geo else 0.0
-    wm = PF.weather_event_mult(mu.temp_f, out, base_temp=PF.park_normal_temp(mu.venue))
-    if weather_strength != 1.0:
-        wm = {k: 1 + (v - 1) * weather_strength for k, v in wm.items()}
-    arrow = "out" if out >= 0 else "in"
-    wx = f"{round(mu.temp_f)}° {abs(round(out))}mph {arrow}" if mu.temp_f is not None else ""
-    return wm, wx
 
 all_rows = []
 for mu in slate:
     wm, wx = matchup_weather(mu)
     all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
-                 for r in project_side(mu.away_lineup, mu.home_pitcher, mu.venue, wm)]
+                 for r in project_side(mu.away_lineup, mu.home_pitcher, mu.venue, wm,
+                                       batter_is_home=False, pitcher_is_home=True)]
     all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
-                 for r in project_side(mu.home_lineup, mu.away_pitcher, mu.venue, wm)]
+                 for r in project_side(mu.home_lineup, mu.away_pitcher, mu.venue, wm,
+                                       batter_is_home=True, pitcher_is_home=False)]
 
 if not all_rows:
     st.warning("No projections yet — lineups likely not posted. Probable pitchers below.")

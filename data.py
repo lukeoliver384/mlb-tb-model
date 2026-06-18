@@ -54,6 +54,10 @@ class Pitcher:
     d_vs_r: float = 0.0
     t_vs_r: float = 0.0
     hr_vs_r: float = 0.0
+    bf_home: float = 0.0
+    tb_home_allowed: float = 0.0
+    bf_away: float = 0.0
+    tb_away_allowed: float = 0.0
 
     @property
     def tb_per_bf(self) -> float:
@@ -75,6 +79,20 @@ class Pitcher:
             return None
         singles = h - d - t - hr
         return {"1B": singles/bf, "2B": d/bf, "3B": t/bf, "HR": hr/bf}
+
+    def home_away_factor(self, is_home: bool, k: float = 600.0) -> float:
+        """Multiplier vs this pitcher's OWN overall TB/BF allowed for home/away,
+        heavily regressed toward 1.0. Small secondary signal."""
+        overall = self.tb_per_bf
+        if overall <= 0:
+            return 1.0
+        rate, n = (self.tb_home_allowed / self.bf_home, self.bf_home) if is_home and self.bf_home \
+            else (self.tb_away_allowed / self.bf_away, self.bf_away) if (not is_home) and self.bf_away \
+            else (overall, 0)
+        if n <= 0:
+            return 1.0
+        reg = (rate * n + overall * k) / (n + k)
+        return reg / overall
 
 
 @dataclass
@@ -104,6 +122,10 @@ class Batter:
     d_vs_r: float = 0.0
     t_vs_r: float = 0.0
     hr_vs_r: float = 0.0
+    pa_home: float = 0.0
+    tb_home: float = 0.0
+    pa_away: float = 0.0
+    tb_away: float = 0.0
 
     @property
     def tb_per_pa(self) -> float:
@@ -123,6 +145,20 @@ class Batter:
             return None
         return (self.single / hits, self.double / hits,
                 self.triple / hits, self.hr / hits)
+
+    def home_away_factor(self, is_home: bool, k: float = 500.0) -> float:
+        """Multiplier vs this batter's OWN overall TB/PA for home or away, heavily
+        regressed toward 1.0 (k large). A small, noisy secondary signal."""
+        overall = self.tb_per_pa
+        if overall <= 0:
+            return 1.0
+        rate, n = (self.tb_home / self.pa_home, self.pa_home) if is_home and self.pa_home \
+            else (self.tb_away / self.pa_away, self.pa_away) if (not is_home) and self.pa_away \
+            else (overall, 0)
+        if n <= 0:
+            return 1.0
+        reg = (rate * n + overall * k) / (n + k)
+        return reg / overall
 
     def event_rates_vs(self, throws: str):
         """Per-PA {1B,2B,3B,HR} vs the pitcher's hand; falls back to overall."""
@@ -209,12 +245,12 @@ def get_lineup(game_pk: int, side: str) -> list[Batter]:
 # --------------------------------------------------------------------------- #
 # Season stats + L/R splits (MLB StatsAPI)                                     #
 # --------------------------------------------------------------------------- #
-def _people_stats(pid: int, group: str, season: int, splits: bool):
-    """group: 'hitting' or 'pitching'."""
+def _people_stats(pid: int, group: str, season: int, splits: bool, sit_codes: str = "vl,vr"):
+    """group: 'hitting' or 'pitching'. sit_codes e.g. 'vl,vr' or 'h,a'."""
     stype = "statSplits" if splits else "season"
     params = dict(stats=stype, group=group, season=season, sportId=1)
     if splits:
-        params["sitCodes"] = "vl,vr"
+        params["sitCodes"] = sit_codes
     return _get(f"{STATSAPI}/people/{pid}/stats", **params)
 
 
@@ -246,6 +282,17 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
                 b.tb_vs_r = float(st.get("totalBases", 0))
                 b.h_vs_r = float(st.get("hits", 0)); b.d_vs_r = float(st.get("doubles", 0))
                 b.t_vs_r = float(st.get("triples", 0)); b.hr_vs_r = float(st.get("homeRuns", 0))
+    except Exception:
+        pass
+    try:
+        ha = _people_stats(b.mlbam_id, "hitting", season, splits=True, sit_codes="h,a")
+        for split in ha["stats"][0]["splits"]:
+            code = split.get("split", {}).get("code", "")
+            st = split["stat"]
+            if code == "h":
+                b.pa_home = float(st.get("plateAppearances", 0)); b.tb_home = float(st.get("totalBases", 0))
+            elif code == "a":
+                b.pa_away = float(st.get("plateAppearances", 0)); b.tb_away = float(st.get("totalBases", 0))
     except Exception:
         pass
     if not b.bats:
@@ -286,6 +333,17 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
                 p.bf_vs_r = float(st.get("battersFaced", 0))
                 p.h_vs_r = float(st.get("hits", 0)); p.d_vs_r = float(st.get("doubles", 0))
                 p.t_vs_r = float(st.get("triples", 0)); p.hr_vs_r = float(st.get("homeRuns", 0))
+    except Exception:
+        pass
+    try:
+        ha = _people_stats(p.mlbam_id, "pitching", season, splits=True, sit_codes="h,a")
+        for split in ha["stats"][0]["splits"]:
+            code = split.get("split", {}).get("code", "")
+            st = split["stat"]
+            if code == "h":
+                p.bf_home = float(st.get("battersFaced", 0)); p.tb_home_allowed = _tb_allowed(st)
+            elif code == "a":
+                p.bf_away = float(st.get("battersFaced", 0)); p.tb_away_allowed = _tb_allowed(st)
     except Exception:
         pass
     return p
