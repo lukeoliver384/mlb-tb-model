@@ -16,8 +16,34 @@ import engine as E
 import park_factors as PF
 import data as D
 
-st.set_page_config(page_title="MLB TB Model", layout="wide")
-st.title("⚾ MLB Total Bases — Daily Slate Model")
+st.set_page_config(page_title="MLB TB Model", page_icon="⚾", layout="wide")
+
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+html, body, [class*="css"], [class*="st-"] { font-family: 'Inter', -apple-system, sans-serif; }
+#MainMenu, footer {visibility: hidden;}
+footer {display: none;}
+.block-container {padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1320px;}
+h1, h2, h3 {font-weight: 600; letter-spacing: -0.015em;}
+[data-testid="stMetric"] {background: #F7F8FA; border: 1px solid #ECEEF1;
+    border-radius: 12px; padding: 14px 18px;}
+[data-testid="stMetricValue"] {font-size: 1.55rem; font-weight: 600;}
+[data-testid="stMetricLabel"] {color: #6B7280;}
+section[data-testid="stSidebar"] {background: #FBFBFC; border-right: 1px solid #EEF0F3;}
+section[data-testid="stSidebar"] h2 {font-size: 0.8rem; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #8A9099; font-weight: 600; margin-top: 0.4rem;}
+[data-testid="stDataFrame"] {border: 1px solid #ECEEF1; border-radius: 12px;}
+div.stButton > button {border-radius: 8px; font-weight: 600; padding: 0.4rem 1.4rem;}
+hr {margin: 0.6rem 0;}
+</style>""", unsafe_allow_html=True)
+
+st.markdown("""<div style="display:flex;align-items:center;gap:12px;margin-bottom:1.1rem;">
+  <span style="font-size:1.9rem;line-height:1;">⚾</span>
+  <div>
+    <div style="font-size:1.45rem;font-weight:600;letter-spacing:-0.02em;line-height:1.1;">MLB Total Bases Model</div>
+    <div style="color:#6B7280;font-size:0.88rem;">Daily slate projections · log5 + Statcast · park &amp; weather adjusted</div>
+  </div>
+</div>""", unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------- #
 # Sidebar: settings                                                           #
@@ -219,16 +245,33 @@ if not all_rows:
 df = pd.DataFrame(all_rows)
 
 # --------------------------------------------------------------------------- #
-# Odds entry + edge                                                           #
+# Summary + projections                                                       #
 # --------------------------------------------------------------------------- #
-st.subheader("1 · Projections")
-st.caption("Sorted by projected total bases. Paste your odds in the next section to get edges.")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Games", len(slate))
+m2.metric("Hitters projected", len(df))
+m3.metric("Avg projected TB", f"{df['Proj TB'].mean():.2f}")
+m4.metric("Highest projection", f"{df['Proj TB'].max():.2f}")
+st.write("")
+
+st.subheader("Projections")
+st.caption("Every hitter vs the opposing starter, sorted by projected total bases. Add odds below for edges.")
 view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
              "vsSP%", "Proj TB", "P(Over)", "Fair Over odds", "Venue", "Wx"]
-st.dataframe(df[view_cols].sort_values("Proj TB", ascending=False),
-             use_container_width=True, hide_index=True)
+dfv = df[view_cols].sort_values("Proj TB", ascending=False).copy()
+dfv["P(Over)"] = dfv["P(Over)"] * 100
+st.dataframe(
+    dfv, use_container_width=True, hide_index=True,
+    column_config={
+        "vs Pitcher": st.column_config.TextColumn("vs Pitcher", width="medium"),
+        "vsSP%": st.column_config.NumberColumn("vs SP", format="%d%%", help="Share of PAs vs the starter"),
+        "Proj TB": st.column_config.NumberColumn("Proj TB", format="%.2f"),
+        "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.0f%%"),
+        "Fair Over odds": st.column_config.NumberColumn("Fair Over", format="%+d"),
+        "Wx": st.column_config.TextColumn("Weather"),
+    })
 
-st.subheader("2 · Paste your odds → edges (both sides)")
+st.subheader("Add your odds")
 st.caption("Enter the Over and/or Under price (American) for each batter. The model checks BOTH sides "
            "and surfaces whichever is +EV — so hitters that project under the line show up as Under value. "
            "If you enter both prices, the market is de-vigged for a cleaner edge.")
@@ -279,8 +322,19 @@ if results:
     if only_plays:
         rdf = rdf[rdf["Edge"] >= 0]
     rdf = rdf.sort_values("Edge", ascending=False)
-    st.subheader("3 · Ranked edges — both sides")
-    st.dataframe(rdf, use_container_width=True, hide_index=True)
+    st.subheader("Ranked edges")
+
+    def _verdict_style(v):
+        return {"VALUE": "background-color:#E1F5EE;color:#0F6E56;font-weight:600",
+                "Lean": "background-color:#FAEEDA;color:#7a4a08",
+                "Pass": "color:#9AA0A6"}.get(v, "")
+    _pct = lambda x: "—" if pd.isna(x) else f"{x:.0%}"
+    _spct = lambda x: "—" if pd.isna(x) else f"{x:+.1%}"
+    styled = (rdf.style
+              .map(_verdict_style, subset=["Verdict"])
+              .format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
+                       "Model EV": _spct, "Odds": lambda x: f"{x:+.0f}"}))
+    st.dataframe(styled, use_container_width=True, hide_index=True)
     st.download_button("Download edges (CSV)", rdf.to_csv(index=False),
                        file_name=f"tb_edges_{date.isoformat()}.csv")
 
