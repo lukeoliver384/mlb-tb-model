@@ -246,90 +246,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
             "_bid": b.mlbam_id,
         })
     return rows
-    for b in batters:
-        if use_splits:
-            b_rate, b_n = b.tb_per_pa_vs(opp_pitcher.throws)
-            p_rate = (opp_pitcher.tb_per_bf_vs_l if b.bats in ("L", "S")
-                      else opp_pitcher.tb_per_bf_vs_r) or opp_pitcher.tb_per_bf
-        else:
-            b_rate, b_n = b.tb_per_pa, b.pa
-            p_rate = opp_pitcher.tb_per_bf
-        # Fangraphs override for batter rate
-        if b.name.lower() in fg_rates:
-            b_rate = fg_rates[b.name.lower()]["tb_per_pa"]
-            b_n = fg_rates[b.name.lower()]["pa"]
-        # Recent-form blend (last-N days vs season), weight scaled by recent sample
-        b_rate0 = b_rate
-        if use_recent and b.recent_pa > 0:
-            recent_rate = b.recent_tb / b.recent_pa
-            eff_w = w_recent * b.recent_pa / (b.recent_pa + 50.0)
-            b_rate = eff_w * recent_rate + (1 - eff_w) * b_rate
-        # Statcast expected blend (luck factor = est_slg/slg)
-        p_rate0 = p_rate
-        if use_statcast and b.mlbam_id in savant_bat:
-            b_rate = E.blend(b_rate, b_rate * savant_bat[b.mlbam_id]["luck"], w_statcast)
-        if use_statcast and opp_pitcher.mlbam_id in savant_pit:
-            p_rate = E.blend(p_rate, p_rate * savant_pit[opp_pitcher.mlbam_id]["luck"], w_statcast)
-        # Home/away (heavily regressed secondary nudge)
-        if use_homeaway:
-            b_rate *= b.home_away_factor(batter_is_home)
-            p_rate *= opp_pitcher.home_away_factor(pitcher_is_home)
-        if not b_rate or not p_rate:
-            continue
-        # Starter/bullpen split
-        total_pa = PF.expected_pa(b.order)
-        if auto_bullpen and opp_pitcher.bf_per_start > 0:
-            this_share = E.pa_vs_starter(b.order, opp_pitcher.bf_per_start, total_pa) / total_pa
-        else:
-            this_share = sp_share_manual
-        # Batting side (switch hitters bat opposite the pitcher's hand)
-        side = b.bats
-        if side == "S":
-            side = "L" if opp_pitcher.throws == "R" else "R"
-        if use_park:
-            pmult = 1 + (PF.park_mult_hand(venue, side) - 1) * park_strength
-            park_ev = PF.park_event_hand(venue, side, park_strength)
-        else:
-            pmult, park_ev = 1.0, None
-        if wmult:
-            park_ev = PF.combine_event_mults(park_ev, wmult)
-        shares = b.hit_shares()
-        ht = E.HitTypeShares(*shares) if shares else E.HitTypeShares()
-        ber = per = None
-        if use_components:
-            raw_b = b.event_rates_vs(opp_pitcher.throws)
-            raw_p = opp_pitcher.event_rates_allowed_vs(side)
-            if raw_b and raw_p:
-                b_adj = b_rate / b_rate0 if b_rate0 else 1.0
-                p_adj = p_rate / p_rate0 if p_rate0 else 1.0
-                ber = {ev: E.regress(raw_b[ev], b_n, E.LEAGUE_EVENT_RATES[ev], int(reg_k)) * b_adj
-                       for ev in raw_b}
-                per = {ev: E.regress(raw_p[ev], max(opp_pitcher.bf, 1), E.LEAGUE_EVENT_RATES[ev], int(reg_k)) * p_adj
-                       for ev in raw_p}
-        inp = E.ProjectionInput(
-            batter_tb_per_pa=b_rate, batter_pa_sample=b_n,
-            pitcher_tb_per_pa_allowed=p_rate, pitcher_bf_sample=max(opp_pitcher.bf, 1),
-            line=default_line, side="Over",
-            expected_pa=total_pa, park_mult=pmult,
-            shares=ht, sp_share=this_share, bullpen_rate=bullpen_rate,
-            league=league_rate, reg_k=int(reg_k),
-            batter_event_rates=ber, pitcher_event_rates=per,
-            park_event_mult=park_ev,
-        )
-        r = E.project(inp)
-        p_cover = r.p_cover if method.startswith("Exact") else r.p_cover_poisson
-        rows.append({
-            "Batter": b.name, "Slot": b.order, "B": b.bats,
-            "vs Pitcher": opp_pitcher.name, "P": opp_pitcher.throws,
-            "Line": default_line,
-            "vsSP%": round(this_share * 100),
-            "Proj TB": round(r.lam, 2),
-            "P(Over)": round(p_cover, 3),
-            "Fair Over odds": round(E.prob_to_american(p_cover), 0),
-            "_b_rate": round(r.batter_rate, 3), "_p_rate": round(r.pitcher_rate, 3),
-            "_bid": b.mlbam_id,
-        })
-    return rows
+
 
 def matchup_weather(mu):
     try:
@@ -349,27 +266,35 @@ def matchup_weather(mu):
     except Exception:
         return None, ""
 
-all_rows = []
-for mu in slate:
-    wm, wx = matchup_weather(mu)
-    all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
-                 for r in project_side(mu.away_lineup, mu.home_pitcher, mu.venue, wm,
-                                       batter_is_home=False, pitcher_is_home=True)]
-    all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
-                 for r in project_side(mu.home_lineup, mu.away_pitcher, mu.venue, wm,
-                                       batter_is_home=True, pitcher_is_home=False)]
-
-if not all_rows:
-    st.warning("No projections yet — lineups likely not posted. Probable pitchers below.")
+# Compute projections ONLY when the slate is (re)loaded, then freeze them in the
+# session so reruns (typing odds, logging bets) and forecast updates don't move them.
+if go or st.session_state.get("proj_df") is None:
+    all_rows = []
     for mu in slate:
-        st.write(f"**{mu.away} @ {mu.home}** — "
-                 f"{mu.away_pitcher.name if mu.away_pitcher else 'TBD'} vs "
-                 f"{mu.home_pitcher.name if mu.home_pitcher else 'TBD'}")
-    st.stop()
+        wm, wx = matchup_weather(mu)
+        all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
+                     for r in project_side(mu.away_lineup, mu.home_pitcher, mu.venue, wm,
+                                           batter_is_home=False, pitcher_is_home=True)]
+        all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
+                     for r in project_side(mu.home_lineup, mu.away_pitcher, mu.venue, wm,
+                                           batter_is_home=True, pitcher_is_home=False)]
+    if not all_rows:
+        st.warning("No projections yet — lineups likely not posted. Probable pitchers below.")
+        for mu in slate:
+            st.write(f"**{mu.away} @ {mu.home}** — "
+                     f"{mu.away_pitcher.name if mu.away_pitcher else 'TBD'} vs "
+                     f"{mu.home_pitcher.name if mu.home_pitcher else 'TBD'}")
+        st.stop()
+    _frozen = pd.DataFrame(all_rows)
+    st.session_state["proj_df"] = _frozen
+    st.session_state["proj_meta"] = (date.isoformat(), STAT)
 
-df = pd.DataFrame(all_rows)
+df = st.session_state["proj_df"]
 bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"])
            for _, r in df.iterrows()}
+_fd, _fs = st.session_state.get("proj_meta", ("", STAT))
+st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
+           "Change settings or date? Click **Load slate** to recompute.")
 
 # --------------------------------------------------------------------------- #
 # Summary + projections                                                       #
