@@ -402,11 +402,24 @@ st.subheader("Add your odds")
 st.caption("Enter the Over and/or Under price (American) for each batter. The model checks BOTH sides "
            "and surfaces whichever is +EV — so hitters that project under the line show up as Under value. "
            "If you enter both prices, the market is de-vigged for a cleaner edge.")
+odds_store = st.session_state.setdefault("odds_store", {})
+
+def _okey(game, batter):
+    return (date.isoformat(), STAT, str(game), str(batter))
+
 odds_df = df[["Game", "Batter", "Line", "P(Over)"]].copy()
-odds_df["Over odds"] = ""
-odds_df["Under odds"] = ""
+odds_df["Over odds"] = [odds_store.get(_okey(g, b), {}).get("over", "")
+                        for g, b in zip(odds_df["Game"], odds_df["Batter"])]
+odds_df["Under odds"] = [odds_store.get(_okey(g, b), {}).get("under", "")
+                         for g, b in zip(odds_df["Game"], odds_df["Batter"])]
 edited = st.data_editor(odds_df, use_container_width=True, hide_index=True,
-                        disabled=["Game", "Batter", "Line", "P(Over)"])
+                        disabled=["Game", "Batter", "Line", "P(Over)"],
+                        key=f"odds_editor_{date.isoformat()}_{STAT}")
+# Remember entered odds so reloading the slate doesn't wipe them
+for _, _r in edited.iterrows():
+    _o, _u = str(_r["Over odds"]).strip(), str(_r["Under odds"]).strip()
+    if _o or _u:
+        odds_store[_okey(_r["Game"], _r["Batter"])] = {"over": _o, "under": _u}
 
 def _num(x):
     try:
