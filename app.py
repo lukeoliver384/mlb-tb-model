@@ -512,6 +512,7 @@ if results:
         st.subheader("Top 5 value plays")
         st.caption("Highest edge vs the market you entered, with data-confidence stars.")
         _vshow = _val[["Batter", "Side", "Line", "Odds", "Edge", "Kelly %", "Conf"]].copy()
+        _vshow["Edge"] = _vshow["Edge"] * 100      # fraction -> percentage points
         st.dataframe(_vshow, use_container_width=True, hide_index=True,
                      column_config={
                          "Odds": st.column_config.NumberColumn("Odds", format="%+d"),
