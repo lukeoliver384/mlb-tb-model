@@ -186,13 +186,21 @@ def wind_out_component(speed_mph: float, dir_from_deg: float, cf_bearing: float)
     return speed_mph * _math.cos(_math.radians(blow_to - cf_bearing))
 
 
-def weather_event_mult(temp_f: float, wind_out_mph: float) -> dict:
+def weather_event_mult(temp_f: float, wind_out_mph: float, base_temp: float = 73.0) -> dict:
     """
     Per-event weather multipliers {1B,2B,3B,HR}, applied on top of park factors.
     Warm air + wind blowing out help the ball carry (HR most, XBH some, 1B little).
-    Conservative coefficients; tune against results.
+
+    IMPORTANT: this measures the DEVIATION from the park's seasonal-normal
+    conditions, not the absolute. The Savant park factors already bake in each
+    park's typical climate, so weather should only move the projection when the
+    day is unusual (hotter/colder/windier than normal). `base_temp` is the park's
+    normal game-time temperature; wind is centered on 0 (a park's seasonal net
+    out/in averages ~0 since direction varies day to day). On a normal day the
+    multipliers come out ~1.0, keeping the slate league-neutral.
+    Conservative coefficients; tune against results via the accuracy tracker.
     """
-    dt = (temp_f - 70.0) if temp_f is not None else 0.0
+    dt = (temp_f - base_temp) if temp_f is not None else 0.0
     w = wind_out_mph or 0.0
     hr = 1 + dt * 0.007 + w * 0.015      # ~0.7%/degF, ~1.5%/mph out
     xb = 1 + dt * 0.003 + w * 0.006      # doubles/triples: smaller
@@ -213,6 +221,27 @@ def combine_event_mults(*mults: dict) -> dict:
         for k in out:
             out[k] *= m.get(k, 1.0)
     return out
+
+
+# Approximate seasonal (regular-season, game-time) normal temperatures (F).
+# Used to center the weather adjustment; tune or replace with a climatology pull.
+PARK_NORMAL_TEMP = {
+    "Oriole Park at Camden Yards": 74, "Fenway Park": 70, "Yankee Stadium": 74,
+    "Tropicana Field": 72, "Rogers Centre": 72, "Rate Field": 72,
+    "Progressive Field": 71, "Comerica Park": 71, "Kauffman Stadium": 78,
+    "Target Field": 72, "Daikin Park": 84, "Angel Stadium": 75,
+    "Sutter Health Park": 86, "T-Mobile Park": 68, "Globe Life Field": 86,
+    "Truist Park": 80, "loanDepot park": 84, "Citi Field": 74,
+    "Citizens Bank Park": 75, "Nationals Park": 78, "Wrigley Field": 72,
+    "Great American Ball Park": 76, "American Family Field": 72, "PNC Park": 71,
+    "Busch Stadium": 80, "Chase Field": 90, "Coors Field": 72,
+    "Dodger Stadium": 75, "Petco Park": 70, "Oracle Park": 62,
+}
+
+
+def park_normal_temp(venue: str) -> float:
+    """Seasonal-normal game-time temperature for centering weather. Default 73."""
+    return PARK_NORMAL_TEMP.get(PARK_ALIASES.get(venue, venue), 73.0)
 
 
 def weather_applies(venue: str, roof_closed: bool = False) -> bool:

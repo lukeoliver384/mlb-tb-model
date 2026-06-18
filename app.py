@@ -215,7 +215,7 @@ def matchup_weather(mu):
         return None, ""
     geo = PF.PARK_GEO.get(PF.PARK_ALIASES.get(mu.venue, mu.venue))
     out = PF.wind_out_component(mu.wind_mph or 0, mu.wind_dir or 0, geo["cf_bearing"]) if geo else 0.0
-    wm = PF.weather_event_mult(mu.temp_f, out)
+    wm = PF.weather_event_mult(mu.temp_f, out, base_temp=PF.park_normal_temp(mu.venue))
     if weather_strength != 1.0:
         wm = {k: 1 + (v - 1) * weather_strength for k, v in wm.items()}
     arrow = "out" if out >= 0 else "in"
