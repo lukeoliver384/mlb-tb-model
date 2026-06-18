@@ -332,22 +332,24 @@ odds_store = st.session_state.setdefault("odds_store", {})
 def _okey(game, batter):
     return (date.isoformat(), STAT, str(game), str(batter))
 
-# Stateful editor: build the table once per date+prop (pre-filled from the saved
-# store), then let the editor own its state. Don't rebuild it every rerun, or
-# in-progress edits get reverted.
-_ekey = f"odds_tbl_{date.isoformat()}_{STAT}"
-if go or _ekey not in st.session_state:
+# Canonical stateful data_editor: a STABLE base (rebuilt only on load) + a fixed
+# key; edits live in the widget and come back via the return value. We never write
+# the output back into the base, which is what caused the revert before.
+_basekey = f"odds_base_{date.isoformat()}_{STAT}"
+_edkey = f"odds_ed_{date.isoformat()}_{STAT}"
+if go or _basekey not in st.session_state:
     base = df[["Game", "Batter", "Line", "P(Over)"]].copy()
     base["Over odds"] = [odds_store.get(_okey(g, b), {}).get("over", "")
                          for g, b in zip(base["Game"], base["Batter"])]
     base["Under odds"] = [odds_store.get(_okey(g, b), {}).get("under", "")
                           for g, b in zip(base["Game"], base["Batter"])]
-    st.session_state[_ekey] = base
+    st.session_state[_basekey] = base
+    st.session_state.pop(_edkey, None)          # clear stale edit deltas on reload
 
-edited = st.data_editor(st.session_state[_ekey], use_container_width=True, hide_index=True,
+edited = st.data_editor(st.session_state[_basekey], key=_edkey,
+                        use_container_width=True, hide_index=True,
                         disabled=["Game", "Batter", "Line", "P(Over)"])
-st.session_state[_ekey] = edited   # persist edits within the session
-# also mirror into the cross-date store
+# mirror entered odds into the cross-date store (read-only; does not feed the base)
 for _, _r in edited.iterrows():
     _o, _u = str(_r["Over odds"]).strip(), str(_r["Under odds"]).strip()
     if _o or _u:
