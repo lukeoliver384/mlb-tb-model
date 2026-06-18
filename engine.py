@@ -58,6 +58,19 @@ def prob_to_american(p: float) -> float:
     return -p / (1 - p) * 100 if p >= 0.5 else (1 - p) / p * 100
 
 
+def confidence_score(batter_pa: float, pitcher_bf: float, split_pa: float,
+                     use_splits: bool) -> int:
+    """1-5 score for how well-founded a projection is (sample size + split depth).
+    NOT an edge score — it rates the data behind the number, so a thin-sample
+    projection reads as low confidence even if the point estimate looks strong."""
+    s = 3.0
+    s += 1 if batter_pa >= 350 else (-1 if batter_pa < 120 else 0)
+    s += 0.5 if pitcher_bf >= 300 else (-0.5 if pitcher_bf < 120 else 0)
+    if use_splits and split_pa < 30:      # platoon split too thin, fell back to overall
+        s -= 1
+    return int(max(1, min(5, round(s))))
+
+
 def no_vig_two_way(over_odds: float, under_odds: float) -> tuple[float, float]:
     """De-vig a two-way market into fair (over, under) probabilities."""
     io, iu = american_to_implied(over_odds), american_to_implied(under_odds)

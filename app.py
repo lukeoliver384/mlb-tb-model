@@ -87,6 +87,12 @@ with st.sidebar:
     min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
     kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05,
                            help="Fraction of full Kelly to stake. Default 0.25 = quarter Kelly. Stakes are % of bankroll.")
+    max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, 5.0, 0.5,
+                                help="Hard cap on any single bet, applied AFTER Kelly fractioning. Guards against model overconfidence.")
+    conf_shrink = st.slider("Shrink toward market", 0.0, 0.6, 0.25, 0.05,
+                            help="Pulls the model probability toward the market price before sizing. 0 = trust model fully; higher = defer more to a sharp line. Tones down overconfidence.")
+    edge_cap = st.slider("Cap edge for sizing (pts)", 0.05, 0.30, 0.15, 0.01,
+                         help="Hard backstop after the shrink: max model-vs-market edge used for Kelly.")
 
     st.caption("Fangraphs CSV (optional) — overrides MLB-API batter TB/PA")
     fg_csv = st.file_uploader("Fangraphs batting export (.csv)", type=["csv"])
@@ -147,6 +153,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
         side = b.bats
         if side == "S":
             side = "L" if opp_pitcher.throws == "R" else "R"
+        _splitpa = b.pa_vs_l if opp_pitcher.throws == "L" else b.pa_vs_r
         if use_park:
             pmult = 1 + (PF.park_mult_hand(venue, side) - 1) * park_strength
             park_ev = PF.park_event_hand(venue, side, park_strength)
@@ -179,7 +186,11 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
                 "Line": default_line, "vsSP%": round(this_share * 100),
                 "Proj HRR": round(lam, 2), "P(Over)": round(p_cover, 3),
                 "Fair Over odds": round(E.prob_to_american(p_cover), 0),
-                "_bid": b.mlbam_id,
+                "Conf": E.confidence_score(b.pa, opp_pitcher.bf, _splitpa, use_splits),
+                "_bid": b.mlbam_id, "_b_rate": round(h_pa, 3), "_p_rate": round(p_h_bf, 3),
+                "_matchup": round(lam / total_pa, 3) if total_pa else 0,
+                "_exp_pa": round(total_pa, 2), "_park": round(pmult, 3),
+                "_bpa": round(b.pa), "_pbf": round(opp_pitcher.bf), "_recent": None,
             })
             continue
 
@@ -242,8 +253,12 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
             "Proj TB": round(r.lam, 2),
             "P(Over)": round(p_cover, 3),
             "Fair Over odds": round(E.prob_to_american(p_cover), 0),
+            "Conf": E.confidence_score(b_n, opp_pitcher.bf, _splitpa, use_splits),
             "_b_rate": round(r.batter_rate, 3), "_p_rate": round(r.pitcher_rate, 3),
             "_bid": b.mlbam_id,
+            "_matchup": round(r.matchup_rate, 3), "_exp_pa": round(total_pa, 2),
+            "_park": round(pmult, 3), "_bpa": round(b_n), "_pbf": round(opp_pitcher.bf),
+            "_recent": (round(b.recent_tb / b.recent_pa, 3) if (use_recent and b.recent_pa > 0) else None),
         })
     return rows
 
@@ -310,9 +325,10 @@ st.write("")
 st.subheader("Projections")
 st.caption(f"Every hitter vs the opposing starter, sorted by projected {STAT}. Add odds below for edges.")
 view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
-             "vsSP%", proj_col, "P(Over)", "Fair Over odds", "Venue", "Wx"]
+             "vsSP%", proj_col, "P(Over)", "Fair Over odds", "Conf", "Venue", "Wx"]
 dfv = df[view_cols].sort_values(proj_col, ascending=False).copy()
 dfv["P(Over)"] = dfv["P(Over)"] * 100
+dfv["Conf"] = dfv["Conf"].apply(lambda n: "★" * int(n) if pd.notna(n) else "")
 st.dataframe(
     dfv, use_container_width=True, hide_index=True,
     column_config={
@@ -321,8 +337,59 @@ st.dataframe(
         proj_col: st.column_config.NumberColumn(proj_col, format="%.2f"),
         "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.1f%%"),
         "Fair Over odds": st.column_config.NumberColumn("Fair Over", format="%+d"),
+        "Conf": st.column_config.TextColumn("Conf", help="Data-quality confidence (sample size + split depth), not edge"),
         "Wx": st.column_config.TextColumn("Weather"),
     })
+
+# --- Why the strong picks ---
+st.subheader("Why the strong picks")
+st.caption("High cover-probability leans with the drivers behind them. The stars = how well-founded "
+           "the number is (sample size + split depth) — a strong % on thin data gets fewer stars.")
+
+def _summary(row):
+    p_over = float(row["P(Over)"])
+    sidelbl = "Over" if p_over >= 0.5 else "Under"
+    lp = max(p_over, 1 - p_over)
+    bits = [f"{row.get('B','?')}-bat vs {row.get('P','?')}HP {row.get('vs Pitcher','')}".strip()]
+    pk = row.get("_park", 1.0) or 1.0
+    if pk >= 1.03:
+        bits.append("hitter-friendly park")
+    elif pk <= 0.97:
+        bits.append("pitcher-friendly park")
+    if row.get("Wx"):
+        bits.append(f"wx {row['Wx']}")
+    rc, br = row.get("_recent"), row.get("_b_rate")
+    if rc is not None and br:
+        bits.append("running hot lately" if rc > br else "cold lately")
+    samp = f"{row.get('_bpa','?')} PA / {row.get('_pbf','?')} BF faced"
+    return (f"**{row['Batter']} {sidelbl} {row['Line']}** — model {lp*100:.0f}%. "
+            + "; ".join(bits) + f". Based on {samp}.")
+
+_strong = df.copy()
+_strong["_lean"] = _strong["P(Over)"].apply(lambda p: max(float(p), 1 - float(p)))
+_strong = _strong[_strong["_lean"] >= 0.57].sort_values("_lean", ascending=False).head(20)
+if _strong.empty:
+    st.caption("No strong leans on this slate (no side at 57%+).")
+else:
+    for _, _row in _strong.iterrows():
+        _stars = "★" * int(_row.get("Conf", 3))
+        _side = "Over" if float(_row["P(Over)"]) >= 0.5 else "Under"
+        with st.expander(f"{_row['Batter']} — {_side} {_row['Line']} · "
+                         f"{_row['_lean']*100:.0f}% · {_stars}"):
+            st.markdown(_summary(_row))
+            _brk = {
+                "Regressed batter rate": _row.get("_b_rate"),
+                "Pitcher allowed rate": _row.get("_p_rate"),
+                "Log5 matchup / PA": _row.get("_matchup"),
+                "Expected PA": _row.get("_exp_pa"),
+                "Park factor": _row.get("_park"),
+                "Weather": _row.get("Wx") or "—",
+                "Recent rate": _row.get("_recent") if _row.get("_recent") is not None else "—",
+                proj_col: _row.get(proj_col),
+                "Model P(Over)": f"{float(_row['P(Over)'])*100:.1f}%",
+                "Confidence (data)": _stars,
+            }
+            st.table(pd.DataFrame(list(_brk.items()), columns=["Factor", "Value"]))
 
 st.subheader("Add your odds")
 st.caption("Enter the Over and/or Under price (American) for each batter. The model checks BOTH sides "
@@ -418,7 +485,10 @@ for _, row in edited.iterrows():
         payout = E.american_to_decimal_profit(odds)
         ev = p_model * payout - (1 - p_model)
         edge = p_model - (fair if fair is not None else E.american_to_implied(odds))
-        kel = E.kelly_fraction(p_model, odds) * kelly_mult
+        _mkt = fair if fair is not None else E.american_to_implied(odds)
+        _p_shrunk = (1 - conf_shrink) * p_model + conf_shrink * _mkt   # tone toward market
+        _p_size = min(_p_shrunk, _mkt + edge_cap)                      # hard edge backstop
+        kel = min(E.kelly_fraction(_p_size, odds) * kelly_mult, max_stake / 100.0)
         results.append({
             "Game": row["Game"], "Batter": row["Batter"], "Line": row["Line"],
             "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
