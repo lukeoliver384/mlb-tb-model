@@ -37,13 +37,14 @@ div.stButton > button {border-radius: 8px; font-weight: 600; padding: 0.4rem 1.4
 hr {margin: 0.6rem 0;}
 </style>""", unsafe_allow_html=True)
 
-st.markdown("""<div style="display:flex;align-items:center;gap:12px;margin-bottom:1.1rem;">
-  <span style="font-size:1.9rem;line-height:1;">⚾</span>
-  <div>
-    <div style="font-size:1.45rem;font-weight:600;letter-spacing:-0.02em;line-height:1.1;">MLB Total Bases Model</div>
-    <div style="color:#9AA1AC;font-size:0.88rem;">Daily slate projections · log5 + Statcast · park &amp; weather adjusted</div>
-  </div>
-</div>""", unsafe_allow_html=True)
+st.markdown(
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:1.1rem;">'
+    '<span style="font-size:1.9rem;line-height:1;">⚾</span>'
+    '<div>'
+    '<div style="font-size:1.45rem;font-weight:600;letter-spacing:-0.02em;line-height:1.1;">MLB Total Bases Model</div>'
+    '<div style="color:#9AA1AC;font-size:0.88rem;">Daily slate projections · log5 + Statcast · park &amp; weather adjusted</div>'
+    '</div></div>',
+    unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------- #
 # Sidebar: settings                                                           #
