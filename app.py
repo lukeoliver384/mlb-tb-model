@@ -81,6 +81,8 @@ with st.sidebar:
     method = st.radio("Cover-probability method", ["Exact distribution (recommended)", "Poisson (sheet original)"])
     default_line = st.number_input("Default TB line", 0.5, 5.5, 1.5, 0.5)
     min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
+    kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05,
+                           help="Fraction of full Kelly to stake. Default 0.25 = quarter Kelly. Stakes are % of bankroll.")
 
     st.caption("Fangraphs CSV (optional) — overrides MLB-API batter TB/PA")
     fg_csv = st.file_uploader("Fangraphs batting export (.csv)", type=["csv"])
@@ -320,11 +322,13 @@ for _, row in edited.iterrows():
         payout = E.american_to_decimal_profit(odds)
         ev = p_model * payout - (1 - p_model)
         edge = p_model - (fair if fair is not None else E.american_to_implied(odds))
+        kel = E.kelly_fraction(p_model, odds) * kelly_mult
         results.append({
             "Game": row["Game"], "Batter": row["Batter"], "Line": row["Line"],
             "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
             "Fair P": round(fair, 3) if fair is not None else None,
             "Edge": round(edge, 3), "Model EV": round(ev, 3),
+            "Kelly %": round(kel * 100, 2),
             "Verdict": "VALUE" if edge >= min_edge else ("Lean" if edge >= 0 else "Pass"),
         })
 
@@ -344,7 +348,8 @@ if results:
     _spct = lambda x: "—" if pd.isna(x) else f"{x:+.1%}"
     try:
         sty = rdf.style.format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
-                                "Model EV": _spct, "Odds": lambda x: f"{x:+.0f}"})
+                                "Model EV": _spct, "Odds": lambda x: f"{x:+.0f}",
+                                "Kelly %": lambda x: f"{x:.2f}%"})
         sty = sty.map(_verdict_style, subset=["Verdict"]) if hasattr(sty, "map") \
             else sty.applymap(_verdict_style, subset=["Verdict"])
         st.dataframe(sty, use_container_width=True, hide_index=True)
@@ -354,11 +359,11 @@ if results:
                        file_name=f"tb_edges_{date.isoformat()}.csv")
 
     st.markdown("**Log the plays you're betting**")
-    st.caption("Tick the plays you took (stake defaults to 1u — edit if you want), then tap the button. "
-               "One tap writes them straight to your bet sheet.")
+    st.caption("Stake defaults to the suggested fractional-Kelly size (% of bankroll). "
+               "Tick the plays you took, adjust stakes if needed, then tap to log them to your sheet.")
     bet_edit = rdf[["Game", "Batter", "Side", "Line", "Odds"]].copy()
     bet_edit.insert(0, "Bet", False)
-    bet_edit["Stake (u)"] = 1.0
+    bet_edit["Stake (u)"] = rdf["Kelly %"].round(2).values   # fractional-Kelly % of bankroll
     bet_edited = st.data_editor(
         bet_edit, hide_index=True, use_container_width=True,
         disabled=["Game", "Batter", "Side", "Line", "Odds"],

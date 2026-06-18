@@ -33,6 +33,15 @@ def american_to_decimal_profit(odds: float) -> float:
     return odds / 100 if odds > 0 else 100 / abs(odds)
 
 
+def kelly_fraction(p: float, odds: float) -> float:
+    """Full-Kelly fraction of bankroll for win prob p at American odds. 0 if -EV."""
+    b = american_to_decimal_profit(odds)
+    if b <= 0:
+        return 0.0
+    f = (p * (b + 1) - 1) / b
+    return max(0.0, f)
+
+
 def american_to_implied(odds: float) -> float:
     """Implied (vig-inclusive) probability of a single American price."""
     return 100 / (odds + 100) if odds > 0 else abs(odds) / (abs(odds) + 100)
