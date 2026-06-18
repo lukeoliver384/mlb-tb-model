@@ -336,18 +336,14 @@ def _okey(game, batter):
 # key; edits live in the widget and come back via the return value. We never write
 # the output back into the base, which is what caused the revert before.
 def _pf(g, b, side):
-    v = odds_store.get(_okey(g, b), {}).get(side, None)
-    try:
-        return float(v)
-    except (ValueError, TypeError):
-        return None
+    return str(odds_store.get(_okey(g, b), {}).get(side, "") or "")
 
 _basekey = f"odds_base_{date.isoformat()}_{STAT}"
 _edkey = f"odds_ed_{date.isoformat()}_{STAT}"
 if go or _basekey not in st.session_state:
     base = df[["Game", "Batter", "Line", "P(Over)"]].copy()
-    base["Over odds"] = pd.Series([_pf(g, b, "over") for g, b in zip(base["Game"], base["Batter"])], dtype="float64")
-    base["Under odds"] = pd.Series([_pf(g, b, "under") for g, b in zip(base["Game"], base["Batter"])], dtype="float64")
+    base["Over odds"] = pd.Series([_pf(g, b, "over") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
+    base["Under odds"] = pd.Series([_pf(g, b, "under") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
     st.session_state[_basekey] = base
     st.session_state.pop(_edkey, None)
 
@@ -356,17 +352,18 @@ edited = st.data_editor(
     use_container_width=True, hide_index=True,
     disabled=["Game", "Batter", "Line", "P(Over)"],
     column_config={
-        "Over odds": st.column_config.NumberColumn("Over odds", format="%d", step=5),
-        "Under odds": st.column_config.NumberColumn("Under odds", format="%d", step=5),
+        "Over odds": st.column_config.TextColumn("Over odds", help="American odds, e.g. +120 or -110"),
+        "Under odds": st.column_config.TextColumn("Under odds", help="American odds, e.g. +120 or -110"),
     })
 # mirror entered odds into the cross-date store (read-only; does not feed the base)
 for _, _r in edited.iterrows():
-    _o, _u = _r["Over odds"], _r["Under odds"]
+    _o = str(_r["Over odds"] or "").strip()
+    _u = str(_r["Under odds"] or "").strip()
     rec = {}
-    if pd.notna(_o):
-        rec["over"] = float(_o)
-    if pd.notna(_u):
-        rec["under"] = float(_u)
+    if _o:
+        rec["over"] = _o
+    if _u:
+        rec["under"] = _u
     if rec:
         odds_store[_okey(_r["Game"], _r["Batter"])] = rec
 
