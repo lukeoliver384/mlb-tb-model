@@ -253,6 +253,8 @@ if not all_rows:
     st.stop()
 
 df = pd.DataFrame(all_rows)
+bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"])
+           for _, r in df.iterrows()}
 
 # --------------------------------------------------------------------------- #
 # Summary + projections                                                       #
@@ -351,6 +353,39 @@ if results:
     st.download_button("Download edges (CSV)", rdf.to_csv(index=False),
                        file_name=f"tb_edges_{date.isoformat()}.csv")
 
+    st.markdown("**Log the plays you're betting**")
+    st.caption("Tick the plays you took (stake defaults to 1u — edit if you want), then tap the button. "
+               "One tap writes them straight to your bet sheet.")
+    bet_edit = rdf[["Game", "Batter", "Side", "Line", "Odds"]].copy()
+    bet_edit.insert(0, "Bet", False)
+    bet_edit["Stake (u)"] = 1.0
+    bet_edited = st.data_editor(
+        bet_edit, hide_index=True, use_container_width=True,
+        disabled=["Game", "Batter", "Side", "Line", "Odds"],
+        column_config={"Bet": st.column_config.CheckboxColumn("Bet", help="Tick to log this play"),
+                       "Stake (u)": st.column_config.NumberColumn("Stake (u)", min_value=0.0, step=0.5)})
+    if st.button("✓ Log selected bets", type="primary"):
+        brows = []
+        for _, r in bet_edited.iterrows():
+            if not bool(r["Bet"]):
+                continue
+            try:
+                stake = float(r["Stake (u)"])
+            except (ValueError, TypeError):
+                stake = 1.0
+            bid, pitch = bid_map.get((r["Game"], r["Batter"]), (0, ""))
+            brows.append({"date": date.isoformat(), "batter": r["Batter"], "batter_id": bid,
+                          "pitcher": pitch, "line": r["Line"], "side": r["Side"],
+                          "odds": r["Odds"], "stake": stake})
+        if brows:
+            try:
+                nb = T.log_bets(pd.DataFrame(brows))
+                st.success(f"Logged {nb} bet(s) to the sheet.")
+            except Exception as ex:
+                st.error(f"Bet log failed: {ex}")
+        else:
+            st.warning("Tick at least one play first.")
+
 # --------------------------------------------------------------------------- #
 # Multi-book de-vig helper                                                     #
 # --------------------------------------------------------------------------- #
@@ -396,7 +431,8 @@ with tc2:
     if st.button("Grade past results"):
         try:
             n = T.grade(int(season))
-            st.success(f"Graded {n} settled projections.")
+            nb = T.grade_bets(int(season))
+            st.success(f"Graded {n} projections and {nb} bets.")
         except Exception as ex:
             st.error(f"Grade failed: {ex}")
 
@@ -426,3 +462,13 @@ if _m:
                      })
 else:
     st.info("No graded results yet. Log a slate, and after the games play, click **Grade past results**.")
+
+_bets = T.read_bets()
+_bm = T.bet_metrics(_bets)
+if _bm:
+    st.caption("Betting P&L — graded bets")
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("Record", _bm["record"])
+    b2.metric("Win rate", f"{_bm['win_rate']*100:.0f}%")
+    b3.metric("Units P&L", f"{_bm['units_profit']:+.2f}", help=f"{_bm['n']} graded bets, {_bm['units_staked']:.1f}u staked")
+    b4.metric("ROI", f"{_bm['roi']*100:+.1f}%")

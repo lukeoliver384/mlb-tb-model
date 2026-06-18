@@ -20,10 +20,15 @@ import pandas as pd
 import streamlit as st
 
 import data as D
+import engine as E
 
 LOG_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line",
                "proj_tb", "p_over", "actual_tb", "over_hit", "graded"]
 LOG_CSV = "tracker_log.csv"
+
+BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "line", "side",
+               "odds", "stake", "actual_tb", "result", "profit", "graded"]
+BET_CSV = "tracker_bets.csv"
 
 
 # --------------------------------------------------------------------------- #
@@ -190,3 +195,133 @@ def calibration(log: pd.DataFrame) -> pd.DataFrame:
         actual=("over_hit", "mean")).reset_index()
     out["gap"] = out["actual"] - out["predicted"]
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Bet log (ROI / P&L)                                                         #
+# --------------------------------------------------------------------------- #
+def _bet_ws():
+    ws = _gsheet()
+    if not ws:
+        return None
+    try:
+        sh = ws.spreadsheet
+        try:
+            bws = sh.worksheet("bets")
+        except Exception:
+            bws = sh.add_worksheet(title="bets", rows=2000, cols=len(BET_COLUMNS))
+        if not bws.row_values(1):
+            bws.append_row(BET_COLUMNS)
+        return bws
+    except Exception:
+        return None
+
+
+def read_bets() -> pd.DataFrame:
+    ws = _bet_ws()
+    if ws:
+        try:
+            recs = ws.get_all_records()
+            return pd.DataFrame(recs) if recs else pd.DataFrame(columns=BET_COLUMNS)
+        except Exception:
+            pass
+    if "bet_log" in st.session_state:
+        return st.session_state["bet_log"].copy()
+    if os.path.exists(BET_CSV):
+        try:
+            return pd.read_csv(BET_CSV)
+        except Exception:
+            pass
+    return pd.DataFrame(columns=BET_COLUMNS)
+
+
+def write_bets(df: pd.DataFrame) -> str:
+    df = df[BET_COLUMNS]
+    ws = _bet_ws()
+    if ws:
+        try:
+            ws.clear()
+            ws.update([BET_COLUMNS] + df.astype(object).where(pd.notna(df), "").values.tolist())
+            return "Google Sheet"
+        except Exception:
+            pass
+    st.session_state["bet_log"] = df.copy()
+    try:
+        df.to_csv(BET_CSV, index=False)
+    except Exception:
+        pass
+    return "local"
+
+
+def log_bets(bets_df: pd.DataFrame) -> int:
+    """Append bets (date,batter,batter_id,pitcher,line,side,odds,stake). Dedups exact repeats."""
+    new = bets_df.copy()
+    for c in ("actual_tb", "result", "profit"):
+        new[c] = None
+    new["graded"] = 0
+    existing = read_bets()
+    out = new if existing.empty else pd.concat([existing, new], ignore_index=True)
+    out = out.drop_duplicates(subset=["date", "batter", "side", "odds", "stake"], keep="last")
+    write_bets(out)
+    return len(new)
+
+
+def grade_bets(season: int) -> int:
+    bets = read_bets()
+    if bets.empty:
+        return 0
+    today = dt.date.today().isoformat()
+    n = 0
+    for i, row in bets.iterrows():
+        if str(row.get("graded")) in ("1", "1.0", "True"):
+            continue
+        if str(row["date"]) >= today:
+            continue
+        try:
+            bid = int(row["batter_id"])
+            line = float(row["line"]); odds = float(row["odds"]); stake = float(row["stake"])
+        except (ValueError, TypeError):
+            continue
+        actual = D.player_tb_on_date(bid, season, str(row["date"])) if bid else None
+        if actual is None:
+            bets.at[i, "result"] = "void"; bets.at[i, "profit"] = 0.0
+            bets.at[i, "actual_tb"] = ""; bets.at[i, "graded"] = 1; n += 1
+            continue
+        side = str(row["side"]).lower()
+        won = (actual > line) if side == "over" else (actual < line)
+        push = (actual == line)
+        if push:
+            profit, res = 0.0, "push"
+        elif won:
+            profit, res = stake * E.american_to_decimal_profit(odds), "win"
+        else:
+            profit, res = -stake, "loss"
+        bets.at[i, "actual_tb"] = actual
+        bets.at[i, "result"] = res
+        bets.at[i, "profit"] = round(profit, 3)
+        bets.at[i, "graded"] = 1
+        n += 1
+    if n:
+        write_bets(bets)
+    return n
+
+
+def bet_metrics(bets: pd.DataFrame) -> dict:
+    g = bets[bets["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    if g.empty:
+        return {}
+    g["stake"] = pd.to_numeric(g["stake"], errors="coerce")
+    g["profit"] = pd.to_numeric(g["profit"], errors="coerce")
+    g = g.dropna(subset=["stake", "profit"])
+    wins = (g["result"] == "win").sum()
+    losses = (g["result"] == "loss").sum()
+    staked = g["stake"].sum()
+    profit = g["profit"].sum()
+    return {
+        "n": len(g),
+        "record": f"{int(wins)}-{int(losses)}" + (f"-{int((g['result']=='push').sum())}" if (g['result']=='push').any() else ""),
+        "win_rate": wins / (wins + losses) if (wins + losses) else 0.0,
+        "units_staked": staked,
+        "units_profit": profit,
+        "roi": profit / staked if staked else 0.0,
+    }
