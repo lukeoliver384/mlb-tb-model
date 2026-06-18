@@ -22,12 +22,12 @@ import streamlit as st
 import data as D
 import engine as E
 
-LOG_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line",
-               "proj_tb", "p_over", "actual_tb", "over_hit", "graded"]
+LOG_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "prop",
+               "proj", "p_over", "actual", "over_hit", "graded"]
 LOG_CSV = "tracker_log.csv"
 
-BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "line", "side",
-               "odds", "stake", "actual_tb", "result", "profit", "graded"]
+BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "line", "side", "prop",
+               "odds", "stake", "actual", "result", "profit", "graded"]
 BET_CSV = "tracker_bets.csv"
 
 
@@ -64,22 +64,24 @@ def backend_name() -> str:
 
 
 def read_log() -> pd.DataFrame:
+    df = None
     ws = _gsheet()
     if ws:
         try:
             recs = ws.get_all_records()
             df = pd.DataFrame(recs)
-            return df if not df.empty else pd.DataFrame(columns=LOG_COLUMNS)
         except Exception:
-            pass
-    if "tracker_log" in st.session_state:
-        return st.session_state["tracker_log"].copy()
-    if os.path.exists(LOG_CSV):
+            df = None
+    if df is None and "tracker_log" in st.session_state:
+        df = st.session_state["tracker_log"].copy()
+    if df is None and os.path.exists(LOG_CSV):
         try:
-            return pd.read_csv(LOG_CSV)
+            df = pd.read_csv(LOG_CSV)
         except Exception:
-            pass
-    return pd.DataFrame(columns=LOG_COLUMNS)
+            df = None
+    if df is None or df.empty:
+        return pd.DataFrame(columns=LOG_COLUMNS)
+    return df.reindex(columns=LOG_COLUMNS)
 
 
 def write_log(df: pd.DataFrame) -> str:
@@ -104,8 +106,9 @@ def write_log(df: pd.DataFrame) -> str:
 # --------------------------------------------------------------------------- #
 # Logging + grading                                                           #
 # --------------------------------------------------------------------------- #
-def log_projections(proj_df: pd.DataFrame, date_str: str) -> int:
-    """Append today's projections (replacing any existing rows for this date)."""
+def log_projections(proj_df: pd.DataFrame, date_str: str,
+                    prop: str = "TB", proj_col: str = "Proj TB") -> int:
+    """Append today's projections for this prop (replacing same date+prop rows)."""
     new = pd.DataFrame({
         "date": date_str,
         "batter": proj_df["Batter"],
@@ -113,22 +116,21 @@ def log_projections(proj_df: pd.DataFrame, date_str: str) -> int:
         "pitcher": proj_df["vs Pitcher"],
         "venue": proj_df["Venue"],
         "line": proj_df["Line"],
-        "proj_tb": proj_df["Proj TB"],
+        "prop": prop,
+        "proj": proj_df[proj_col],
         "p_over": proj_df["P(Over)"],
-        "actual_tb": None, "over_hit": None, "graded": 0,
+        "actual": None, "over_hit": None, "graded": 0,
     })
     log = read_log()
-    if log.empty:
-        out = new
-    else:
-        log = log[log["date"] != date_str]
-        out = new if log.empty else pd.concat([log, new], ignore_index=True)
+    if not log.empty:
+        log = log[~((log["date"] == date_str) & (log["prop"] == prop))]
+    out = new if log.empty else pd.concat([log, new], ignore_index=True)
     write_log(out)
     return len(new)
 
 
 def grade(season: int) -> int:
-    """Fill actual TB for ungraded rows whose game date has passed. Returns # graded."""
+    """Fill actual result for ungraded rows whose game date has passed (prop-aware)."""
     log = read_log()
     if log.empty:
         return 0
@@ -145,10 +147,12 @@ def grade(season: int) -> int:
             continue
         if not bid:
             continue
-        actual = D.player_tb_on_date(bid, season, str(row["date"]))
+        prop = str(row.get("prop") or "TB").upper()
+        fn = D.player_hrr_on_date if prop == "HRR" else D.player_tb_on_date
+        actual = fn(bid, season, str(row["date"]))
         if actual is None:
             continue
-        log.at[i, "actual_tb"] = actual
+        log.at[i, "actual"] = actual
         log.at[i, "over_hit"] = int(actual > float(row["line"]))
         log.at[i, "graded"] = 1
         n += 1
@@ -164,12 +168,12 @@ def metrics(log: pd.DataFrame) -> dict:
     g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
     if g.empty:
         return {}
-    g["proj_tb"] = pd.to_numeric(g["proj_tb"], errors="coerce")
-    g["actual_tb"] = pd.to_numeric(g["actual_tb"], errors="coerce")
+    g["proj"] = pd.to_numeric(g["proj"], errors="coerce")
+    g["actual"] = pd.to_numeric(g["actual"], errors="coerce")
     g["p_over"] = pd.to_numeric(g["p_over"], errors="coerce")
     g["over_hit"] = pd.to_numeric(g["over_hit"], errors="coerce")
-    g = g.dropna(subset=["proj_tb", "actual_tb"])
-    err = (g["proj_tb"] - g["actual_tb"])
+    g = g.dropna(subset=["proj", "actual"])
+    err = (g["proj"] - g["actual"])
     return {
         "n": len(g),
         "mae": err.abs().mean(),
@@ -222,14 +226,14 @@ def read_bets() -> pd.DataFrame:
     if ws:
         try:
             recs = ws.get_all_records()
-            return pd.DataFrame(recs) if recs else pd.DataFrame(columns=BET_COLUMNS)
+            return pd.DataFrame(recs).reindex(columns=BET_COLUMNS) if recs else pd.DataFrame(columns=BET_COLUMNS)
         except Exception:
             pass
     if "bet_log" in st.session_state:
-        return st.session_state["bet_log"].copy()
+        return st.session_state["bet_log"].copy().reindex(columns=BET_COLUMNS)
     if os.path.exists(BET_CSV):
         try:
-            return pd.read_csv(BET_CSV)
+            return pd.read_csv(BET_CSV).reindex(columns=BET_COLUMNS)
         except Exception:
             pass
     return pd.DataFrame(columns=BET_COLUMNS)
@@ -256,7 +260,7 @@ def write_bets(df: pd.DataFrame) -> str:
 def log_bets(bets_df: pd.DataFrame) -> int:
     """Append bets (date,batter,batter_id,pitcher,line,side,odds,stake). Dedups exact repeats."""
     new = bets_df.copy()
-    for c in ("actual_tb", "result", "profit"):
+    for c in ("actual", "result", "profit"):
         new[c] = None
     new["graded"] = 0
     existing = read_bets()
@@ -282,10 +286,12 @@ def grade_bets(season: int) -> int:
             line = float(row["line"]); odds = float(row["odds"]); stake = float(row["stake"])
         except (ValueError, TypeError):
             continue
-        actual = D.player_tb_on_date(bid, season, str(row["date"])) if bid else None
+        prop = str(row.get("prop") or "TB").upper()
+        fn = D.player_hrr_on_date if prop == "HRR" else D.player_tb_on_date
+        actual = fn(bid, season, str(row["date"])) if bid else None
         if actual is None:
             bets.at[i, "result"] = "void"; bets.at[i, "profit"] = 0.0
-            bets.at[i, "actual_tb"] = ""; bets.at[i, "graded"] = 1; n += 1
+            bets.at[i, "actual"] = ""; bets.at[i, "graded"] = 1; n += 1
             continue
         side = str(row["side"]).lower()
         won = (actual > line) if side == "over" else (actual < line)
@@ -296,7 +302,7 @@ def grade_bets(season: int) -> int:
             profit, res = stake * E.american_to_decimal_profit(odds), "win"
         else:
             profit, res = -stake, "loss"
-        bets.at[i, "actual_tb"] = actual
+        bets.at[i, "actual"] = actual
         bets.at[i, "result"] = res
         bets.at[i, "profit"] = round(profit, 3)
         bets.at[i, "graded"] = 1

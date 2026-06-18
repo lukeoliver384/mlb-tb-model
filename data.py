@@ -40,6 +40,7 @@ class Pitcher:
     tb_per_bf_vs_l: float = 0.0
     tb_per_bf_vs_r: float = 0.0
     games_started: float = 0.0
+    r_allowed: float = 0.0
     h_allowed: float = 0.0
     d_allowed: float = 0.0
     t_allowed: float = 0.0
@@ -66,6 +67,14 @@ class Pitcher:
     @property
     def bf_per_start(self) -> float:
         return self.bf / self.games_started if self.games_started else 0.0
+
+    @property
+    def h_per_bf(self) -> float:
+        return self.h_allowed / self.bf if self.bf else 0.0
+
+    @property
+    def r_per_bf(self) -> float:
+        return self.r_allowed / self.bf if self.bf else 0.0
 
     def event_rates_allowed_vs(self, bat_side: str):
         """Per-BF {1B,2B,3B,HR} allowed vs batter side; falls back to overall."""
@@ -126,10 +135,25 @@ class Batter:
     tb_home: float = 0.0
     pa_away: float = 0.0
     tb_away: float = 0.0
+    runs: float = 0.0
+    rbi: float = 0.0
 
     @property
     def tb_per_pa(self) -> float:
         return self.tb / self.pa if self.pa else 0.0
+
+    @property
+    def hits_per_pa(self) -> float:
+        h = self.single + self.double + self.triple + self.hr
+        return h / self.pa if self.pa else 0.0
+
+    @property
+    def runs_per_pa(self) -> float:
+        return self.runs / self.pa if self.pa else 0.0
+
+    @property
+    def rbi_per_pa(self) -> float:
+        return self.rbi / self.pa if self.pa else 0.0
 
     def tb_per_pa_vs(self, throws: str) -> tuple[float, float]:
         """Return (rate, sample_pa) split vs the pitcher's handedness."""
@@ -265,6 +289,8 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
         b.double = float(s.get("doubles", 0))
         b.triple = float(s.get("triples", 0))
         b.hr = float(s.get("homeRuns", 0))
+        b.runs = float(s.get("runs", 0))
+        b.rbi = float(s.get("rbi", 0))
     except Exception:
         pass
     try:
@@ -315,6 +341,7 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
         p.games_started = float(st.get("gamesStarted", 0))
         p.h_allowed = float(st.get("hits", 0)); p.d_allowed = float(st.get("doubles", 0))
         p.t_allowed = float(st.get("triples", 0)); p.hr_allowed = float(st.get("homeRuns", 0))
+        p.r_allowed = float(st.get("runs", 0))
     except Exception:
         pass
     try:
@@ -406,6 +433,18 @@ def player_tb_on_date(pid: int, season: int, date: str):
                  startDate=date, endDate=date)
         st = d["stats"][0]["splits"][0]["stat"]
         return float(st.get("totalBases", 0))
+    except Exception:
+        return None
+
+
+def player_hrr_on_date(pid: int, season: int, date: str):
+    """Actual Hits+Runs+RBIs for a player on a date. None if DNP/missing."""
+    try:
+        d = _get(f"{STATSAPI}/people/{pid}/stats",
+                 stats="byDateRange", group="hitting", season=season, sportId=1,
+                 startDate=date, endDate=date)
+        st = d["stats"][0]["splits"][0]["stat"]
+        return float(st.get("hits", 0)) + float(st.get("runs", 0)) + float(st.get("rbi", 0))
     except Exception:
         return None
 

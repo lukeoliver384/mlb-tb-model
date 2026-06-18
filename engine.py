@@ -22,6 +22,10 @@ LEAGUE_TB_PER_PA = 0.355   # sheet E13
 
 # Approximate league per-PA event rates (tune from a league pull each season).
 LEAGUE_EVENT_RATES = {"1B": 0.137, "2B": 0.044, "3B": 0.004, "HR": 0.030}
+
+# Approximate league per-PA rates for Hits / Runs / RBIs, and runs allowed per BF.
+LEAGUE_HRR = {"H": 0.235, "R": 0.115, "RBI": 0.110}
+LEAGUE_R_PER_BF = 0.118
 REG_K_PA = 175             # sheet E12 (regression constant, in PA)
 
 
@@ -266,6 +270,41 @@ def p_cover_poisson(lam: float, line: float, side: str) -> float:
     k = int(line)
     cdf = sum(exp(-lam) * lam**i / factorial(i) for i in range(k + 1))
     return (1 - cdf) if side.lower() == "over" else cdf
+
+
+# --------------------------------------------------------------------------- #
+# Hits + Runs + RBIs projection                                               #
+# --------------------------------------------------------------------------- #
+def project_hrr(h_pa, h_pa_n, p_h_per_bf, p_bf, r_pa, rbi_pa, p_r_per_bf,
+                line, side="Over", expected_pa=4.3,
+                park_hits=1.0, park_runs=1.0, reg_k=REG_K_PA):
+    """
+    Hits + Runs + RBIs as a combined per-game count.
+
+      * Hits: full batter-vs-pitcher log5 (clean matchup), like total bases.
+      * Runs & RBIs: the batter's own rates, regressed, then scaled by the
+        pitcher's run-suppression (runs allowed/BF vs league) and the park/weather
+        run environment. This is the lineup-context approximation — R/RBI also
+        depend on the hitters around him, which a batter-vs-pitcher model can't see.
+
+    Returns (lam, p_cover). Cover prob uses Poisson on the combined mean (a count
+    approximation; H+R+RBI is mildly overdispersed, so deep overs are slightly
+    understated — tune against the tracker).
+    """
+    h = regress(h_pa, h_pa_n, LEAGUE_HRR["H"], reg_k)
+    ph = regress(p_h_per_bf, p_bf, LEAGUE_HRR["H"], reg_k)
+    hits_adj = log5_rate(h, ph, LEAGUE_HRR["H"]) * park_hits
+
+    run_supp = (p_r_per_bf if p_r_per_bf else LEAGUE_R_PER_BF) / LEAGUE_R_PER_BF
+    run_supp = max(0.6, min(1.5, run_supp))
+    r = regress(r_pa, h_pa_n, LEAGUE_HRR["R"], reg_k)
+    rbi = regress(rbi_pa, h_pa_n, LEAGUE_HRR["RBI"], reg_k)
+    runs_adj = r * run_supp * park_runs
+    rbi_adj = rbi * run_supp * park_runs
+
+    hrr_pa = hits_adj + runs_adj + rbi_adj
+    lam = hrr_pa * expected_pa
+    return lam, p_cover_poisson(lam, line, side)
 
 
 # --------------------------------------------------------------------------- #

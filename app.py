@@ -49,6 +49,10 @@ with st.sidebar:
     st.header("Slate")
     date = st.date_input("Date", dt.date.today())
     season = st.number_input("Stats season", 2015, 2030, dt.date.today().year)
+    prop = st.radio("Prop", ["Total Bases", "Hits + Runs + RBIs"],
+                    help="HRR: Hits is a clean matchup; Runs/RBIs are scaled by the pitcher's run-suppression + run environment (lineup context approximated).")
+    STAT = "TB" if prop.startswith("Total") else "HRR"
+    proj_col = "Proj TB" if STAT == "TB" else "Proj HRR"
 
     st.header("Model")
     league_rate = st.number_input("League TB/PA", 0.30, 0.45, E.LEAGUE_TB_PER_PA, 0.001, format="%.3f")
@@ -133,6 +137,115 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
     rows = []
     if not opp_pitcher:
         return rows
+    for b in batters:
+        # ---- common game geometry ----
+        total_pa = PF.expected_pa(b.order)
+        if auto_bullpen and opp_pitcher.bf_per_start > 0:
+            this_share = E.pa_vs_starter(b.order, opp_pitcher.bf_per_start, total_pa) / total_pa
+        else:
+            this_share = sp_share_manual
+        side = b.bats
+        if side == "S":
+            side = "L" if opp_pitcher.throws == "R" else "R"
+        if use_park:
+            pmult = 1 + (PF.park_mult_hand(venue, side) - 1) * park_strength
+            park_ev = PF.park_event_hand(venue, side, park_strength)
+        else:
+            pmult, park_ev = 1.0, None
+        if wmult:
+            park_ev = PF.combine_event_mults(park_ev, wmult)
+
+        # ---- Hits + Runs + RBIs ----
+        if STAT == "HRR":
+            if use_splits:
+                er = b.event_rates_vs(opp_pitcher.throws)
+                h_pa = sum(er.values()) if er else b.hits_per_pa
+                pr = opp_pitcher.event_rates_allowed_vs(side)
+                p_h_bf = sum(pr.values()) if pr else opp_pitcher.h_per_bf
+            else:
+                h_pa, p_h_bf = b.hits_per_pa, opp_pitcher.h_per_bf
+            if not h_pa:
+                continue
+            ha = b.home_away_factor(batter_is_home) if use_homeaway else 1.0
+            park_runs = pmult * (wmult.get("HR", 1.0) if wmult else 1.0)
+            lam, p_cover = E.project_hrr(
+                h_pa * ha, b.pa, p_h_bf, max(opp_pitcher.bf, 1),
+                b.runs_per_pa * ha, b.rbi_per_pa * ha, opp_pitcher.r_per_bf,
+                line=default_line, side="Over", expected_pa=total_pa,
+                park_hits=pmult, park_runs=park_runs, reg_k=int(reg_k))
+            rows.append({
+                "Batter": b.name, "Slot": b.order, "B": b.bats,
+                "vs Pitcher": opp_pitcher.name, "P": opp_pitcher.throws,
+                "Line": default_line, "vsSP%": round(this_share * 100),
+                "Proj HRR": round(lam, 2), "P(Over)": round(p_cover, 3),
+                "Fair Over odds": round(E.prob_to_american(p_cover), 0),
+                "_bid": b.mlbam_id,
+            })
+            continue
+
+        # ---- Total Bases ----
+        if use_splits:
+            b_rate, b_n = b.tb_per_pa_vs(opp_pitcher.throws)
+            p_rate = (opp_pitcher.tb_per_bf_vs_l if b.bats in ("L", "S")
+                      else opp_pitcher.tb_per_bf_vs_r) or opp_pitcher.tb_per_bf
+        else:
+            b_rate, b_n = b.tb_per_pa, b.pa
+            p_rate = opp_pitcher.tb_per_bf
+        if b.name.lower() in fg_rates:
+            b_rate = fg_rates[b.name.lower()]["tb_per_pa"]
+            b_n = fg_rates[b.name.lower()]["pa"]
+        b_rate0 = b_rate
+        if use_recent and b.recent_pa > 0:
+            recent_rate = b.recent_tb / b.recent_pa
+            eff_w = w_recent * b.recent_pa / (b.recent_pa + 50.0)
+            b_rate = eff_w * recent_rate + (1 - eff_w) * b_rate
+        p_rate0 = p_rate
+        if use_statcast and b.mlbam_id in savant_bat:
+            b_rate = E.blend(b_rate, b_rate * savant_bat[b.mlbam_id]["luck"], w_statcast)
+        if use_statcast and opp_pitcher.mlbam_id in savant_pit:
+            p_rate = E.blend(p_rate, p_rate * savant_pit[opp_pitcher.mlbam_id]["luck"], w_statcast)
+        if use_homeaway:
+            b_rate *= b.home_away_factor(batter_is_home)
+            p_rate *= opp_pitcher.home_away_factor(pitcher_is_home)
+        if not b_rate or not p_rate:
+            continue
+        shares = b.hit_shares()
+        ht = E.HitTypeShares(*shares) if shares else E.HitTypeShares()
+        ber = per = None
+        if use_components:
+            raw_b = b.event_rates_vs(opp_pitcher.throws)
+            raw_p = opp_pitcher.event_rates_allowed_vs(side)
+            if raw_b and raw_p:
+                b_adj = b_rate / b_rate0 if b_rate0 else 1.0
+                p_adj = p_rate / p_rate0 if p_rate0 else 1.0
+                ber = {ev: E.regress(raw_b[ev], b_n, E.LEAGUE_EVENT_RATES[ev], int(reg_k)) * b_adj
+                       for ev in raw_b}
+                per = {ev: E.regress(raw_p[ev], max(opp_pitcher.bf, 1), E.LEAGUE_EVENT_RATES[ev], int(reg_k)) * p_adj
+                       for ev in raw_p}
+        inp = E.ProjectionInput(
+            batter_tb_per_pa=b_rate, batter_pa_sample=b_n,
+            pitcher_tb_per_pa_allowed=p_rate, pitcher_bf_sample=max(opp_pitcher.bf, 1),
+            line=default_line, side="Over",
+            expected_pa=total_pa, park_mult=pmult,
+            shares=ht, sp_share=this_share, bullpen_rate=bullpen_rate,
+            league=league_rate, reg_k=int(reg_k),
+            batter_event_rates=ber, pitcher_event_rates=per,
+            park_event_mult=park_ev,
+        )
+        r = E.project(inp)
+        p_cover = r.p_cover if method.startswith("Exact") else r.p_cover_poisson
+        rows.append({
+            "Batter": b.name, "Slot": b.order, "B": b.bats,
+            "vs Pitcher": opp_pitcher.name, "P": opp_pitcher.throws,
+            "Line": default_line,
+            "vsSP%": round(this_share * 100),
+            "Proj TB": round(r.lam, 2),
+            "P(Over)": round(p_cover, 3),
+            "Fair Over odds": round(E.prob_to_american(p_cover), 0),
+            "_b_rate": round(r.batter_rate, 3), "_p_rate": round(r.pitcher_rate, 3),
+            "_bid": b.mlbam_id,
+        })
+    return rows
     for b in batters:
         if use_splits:
             b_rate, b_n = b.tb_per_pa_vs(opp_pitcher.throws)
@@ -264,22 +377,22 @@ bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"])
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Games", len(slate))
 m2.metric("Hitters projected", len(df))
-m3.metric("Avg projected TB", f"{df['Proj TB'].mean():.2f}")
-m4.metric("Highest projection", f"{df['Proj TB'].max():.2f}")
+m3.metric(f"Avg projected {STAT}", f"{df[proj_col].mean():.2f}")
+m4.metric("Highest projection", f"{df[proj_col].max():.2f}")
 st.write("")
 
 st.subheader("Projections")
-st.caption("Every hitter vs the opposing starter, sorted by projected total bases. Add odds below for edges.")
+st.caption(f"Every hitter vs the opposing starter, sorted by projected {STAT}. Add odds below for edges.")
 view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
-             "vsSP%", "Proj TB", "P(Over)", "Fair Over odds", "Venue", "Wx"]
-dfv = df[view_cols].sort_values("Proj TB", ascending=False).copy()
+             "vsSP%", proj_col, "P(Over)", "Fair Over odds", "Venue", "Wx"]
+dfv = df[view_cols].sort_values(proj_col, ascending=False).copy()
 dfv["P(Over)"] = dfv["P(Over)"] * 100
 st.dataframe(
     dfv, use_container_width=True, hide_index=True,
     column_config={
         "vs Pitcher": st.column_config.TextColumn("vs Pitcher", width="medium"),
         "vsSP%": st.column_config.NumberColumn("vs SP", format="%d%%", help="Share of PAs vs the starter"),
-        "Proj TB": st.column_config.NumberColumn("Proj TB", format="%.2f"),
+        proj_col: st.column_config.NumberColumn(proj_col, format="%.2f"),
         "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.0f%%"),
         "Fair Over odds": st.column_config.NumberColumn("Fair Over", format="%+d"),
         "Wx": st.column_config.TextColumn("Weather"),
@@ -428,7 +541,7 @@ tc1, tc2 = st.columns(2)
 with tc1:
     if st.button("Log today's projections"):
         try:
-            n = T.log_projections(df, date.isoformat())
+            n = T.log_projections(df, date.isoformat(), prop=STAT, proj_col=proj_col)
             st.success(f"Logged {n} projections for {date.isoformat()}.")
         except Exception as ex:
             st.error(f"Log failed: {ex}")
