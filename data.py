@@ -150,6 +150,10 @@ class Matchup:
     away_pitcher: "Pitcher | None" = None
     home_lineup: list = field(default_factory=list)
     away_lineup: list = field(default_factory=list)
+    game_datetime: str = ""          # UTC ISO, for weather hour matching
+    temp_f: "float | None" = None
+    wind_mph: "float | None" = None
+    wind_dir: "float | None" = None  # meteorological (from), degrees
 
 
 # --------------------------------------------------------------------------- #
@@ -174,6 +178,7 @@ def get_schedule(date: str) -> list[Matchup]:
                 home=teams["home"]["team"]["name"],
                 away=teams["away"]["team"]["name"],
                 venue=g.get("venue", {}).get("name", ""),
+                game_datetime=g.get("gameDate", ""),
             )
             for side, attr in (("home", "home_pitcher"), ("away", "away_pitcher")):
                 pp = teams[side].get("probablePitcher")
@@ -389,9 +394,36 @@ def league_reliever_tb_per_bf_default() -> float:
 
 
 # --------------------------------------------------------------------------- #
+# Weather (Open-Meteo, free, no API key)                                       #
+# --------------------------------------------------------------------------- #
+def get_weather(lat: float, lon: float, iso_dt_utc: str):
+    """Return (temp_f, wind_mph, wind_dir_from_deg) at the game hour, or (None,)*3."""
+    if not iso_dt_utc:
+        return None, None, None
+    date = iso_dt_utc[:10]
+    try:
+        hour = int(iso_dt_utc[11:13])
+    except ValueError:
+        return None, None, None
+    try:
+        d = _get("https://api.open-meteo.com/v1/forecast",
+                 latitude=lat, longitude=lon,
+                 hourly="temperature_2m,wind_speed_10m,wind_direction_10m",
+                 temperature_unit="fahrenheit", wind_speed_unit="mph",
+                 start_date=date, end_date=date, timezone="UTC")
+        h = d["hourly"]
+        times = h["time"]
+        idx = min(range(len(times)), key=lambda i: abs(int(times[i][11:13]) - hour))
+        return (h["temperature_2m"][idx], h["wind_speed_10m"][idx], h["wind_direction_10m"][idx])
+    except Exception:
+        return None, None, None
+
+
+# --------------------------------------------------------------------------- #
 # Convenience: build a fully-populated slate                                  #
 # --------------------------------------------------------------------------- #
 def build_slate(date: str, season: int, recent_days: int = 0,
+                want_weather: bool = False, park_geo: dict = None,
                 max_workers: int = 16) -> list[Matchup]:
     """
     Build the full slate, fetching all player stats in parallel.
@@ -437,5 +469,15 @@ def build_slate(date: str, season: int, recent_days: int = 0,
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         list(ex.map(_do_pitcher, pitchers))
         list(ex.map(_do_batter, batters))
+
+    if want_weather and park_geo:
+        def _do_weather(mu: Matchup):
+            geo = park_geo.get(mu.venue)
+            if not geo or geo.get("roof") == "dome":
+                return
+            mu.temp_f, mu.wind_mph, mu.wind_dir = get_weather(
+                geo["lat"], geo["lon"], mu.game_datetime)
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            list(ex.map(_do_weather, games))
 
     return games
