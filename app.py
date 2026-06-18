@@ -32,6 +32,11 @@ with st.sidebar:
     reg_k = st.number_input("Regression K (PA)", 0, 600, E.REG_K_PA, 5)
     use_splits = st.checkbox("Use L/R handedness splits", True)
     use_park = st.checkbox("Apply park factors", True)
+    park_strength = st.slider("Park factor strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_park,
+                              help="Scales how hard park factors push. 0 = ignore parks, 1 = full Savant factor, >1 = amplify.")
+    use_weather = st.checkbox("Apply weather (Open-Meteo)", False,
+                              help="Pulls temp + wind per game; adjusts HR/XBH via wind out/in and temperature. Per-event mode only. Domes auto-neutral.")
+    weather_strength = st.slider("Weather strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_weather)
     auto_bullpen = st.checkbox("Auto starter/bullpen split (from starter depth)", True,
                                help="Computes each batter's share of PAs vs the starter from his batters-faced/start. Uncheck to use a single slider.")
     sp_share_manual = st.slider("Manual share of PAs vs starter", 0.40, 1.00, 1.00, 0.05,
@@ -62,9 +67,14 @@ fg_rates = D.load_fangraphs_csv(fg_csv) if fg_csv else {}
 # Load slate                                                                  #
 # --------------------------------------------------------------------------- #
 @st.cache_data(ttl=900, show_spinner="Pulling lineups & stats from MLB API…")
-def load(date_str: str, season: int, want_recent: bool, recent_days: int):
+def load(date_str: str, season: int, want_recent: bool, recent_days: int, want_weather: bool):
+    geo = dict(PF.PARK_GEO)
+    for alias, real in PF.PARK_ALIASES.items():
+        if real in PF.PARK_GEO:
+            geo[alias] = PF.PARK_GEO[real]
     return D.build_slate(date_str, season,
-                         recent_days=recent_days if want_recent else 0)
+                         recent_days=recent_days if want_recent else 0,
+                         want_weather=want_weather, park_geo=geo)
 
 @st.cache_data(ttl=3600, show_spinner="Pulling Statcast expected stats…")
 def load_savant(season: int):
@@ -76,7 +86,7 @@ with colA:
 
 if go:
     try:
-        st.session_state["slate"] = load(date.isoformat(), int(season), use_recent, int(recent_days))
+        st.session_state["slate"] = load(date.isoformat(), int(season), use_recent, int(recent_days), use_weather)
         st.session_state["savant"] = load_savant(int(season)) if use_statcast else ({}, {})
     except Exception as ex:
         st.error(f"Could not load slate: {ex}")
@@ -92,7 +102,7 @@ if not slate:
 # --------------------------------------------------------------------------- #
 # Project every batter vs opposing starter                                    #
 # --------------------------------------------------------------------------- #
-def project_side(batters, opp_pitcher, venue):
+def project_side(batters, opp_pitcher, venue, wmult=None):
     rows = []
     if not opp_pitcher:
         return rows
@@ -132,7 +142,13 @@ def project_side(batters, opp_pitcher, venue):
         side = b.bats
         if side == "S":
             side = "L" if opp_pitcher.throws == "R" else "R"
-        pmult = PF.park_mult_hand(venue, side) if use_park else 1.0
+        if use_park:
+            pmult = 1 + (PF.park_mult_hand(venue, side) - 1) * park_strength
+            park_ev = PF.park_event_hand(venue, side, park_strength)
+        else:
+            pmult, park_ev = 1.0, None
+        if wmult:
+            park_ev = PF.combine_event_mults(park_ev, wmult)
         shares = b.hit_shares()
         ht = E.HitTypeShares(*shares) if shares else E.HitTypeShares()
         ber = per = None
@@ -154,6 +170,7 @@ def project_side(batters, opp_pitcher, venue):
             shares=ht, sp_share=this_share, bullpen_rate=bullpen_rate,
             league=league_rate, reg_k=int(reg_k),
             batter_event_rates=ber, pitcher_event_rates=per,
+            park_event_mult=park_ev,
         )
         r = E.project(inp)
         p_cover = r.p_cover if method.startswith("Exact") else r.p_cover_poisson
@@ -169,12 +186,27 @@ def project_side(batters, opp_pitcher, venue):
         })
     return rows
 
+def matchup_weather(mu):
+    if not use_weather or not PF.weather_applies(mu.venue):
+        return None, ""
+    if mu.temp_f is None and mu.wind_mph is None:
+        return None, ""
+    geo = PF.PARK_GEO.get(PF.PARK_ALIASES.get(mu.venue, mu.venue))
+    out = PF.wind_out_component(mu.wind_mph or 0, mu.wind_dir or 0, geo["cf_bearing"]) if geo else 0.0
+    wm = PF.weather_event_mult(mu.temp_f, out)
+    if weather_strength != 1.0:
+        wm = {k: 1 + (v - 1) * weather_strength for k, v in wm.items()}
+    arrow = "out" if out >= 0 else "in"
+    wx = f"{round(mu.temp_f)}° {abs(round(out))}mph {arrow}" if mu.temp_f is not None else ""
+    return wm, wx
+
 all_rows = []
 for mu in slate:
-    all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue}
-                 for r in project_side(mu.away_lineup, mu.home_pitcher, mu.venue)]
-    all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue}
-                 for r in project_side(mu.home_lineup, mu.away_pitcher, mu.venue)]
+    wm, wx = matchup_weather(mu)
+    all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
+                 for r in project_side(mu.away_lineup, mu.home_pitcher, mu.venue, wm)]
+    all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
+                 for r in project_side(mu.home_lineup, mu.away_pitcher, mu.venue, wm)]
 
 if not all_rows:
     st.warning("No projections yet — lineups likely not posted. Probable pitchers below.")
@@ -192,7 +224,7 @@ df = pd.DataFrame(all_rows)
 st.subheader("1 · Projections")
 st.caption("Sorted by projected total bases. Paste your odds in the next section to get edges.")
 view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
-             "vsSP%", "Proj TB", "P(Over)", "Fair Over odds", "Venue"]
+             "vsSP%", "Proj TB", "P(Over)", "Fair Over odds", "Venue", "Wx"]
 st.dataframe(df[view_cols].sort_values("Proj TB", ascending=False),
              use_container_width=True, hide_index=True)
 
