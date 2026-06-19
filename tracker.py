@@ -191,33 +191,45 @@ def metrics(log: pd.DataFrame) -> dict:
     g["actual"] = pd.to_numeric(g["actual"], errors="coerce")
     g["p_over"] = pd.to_numeric(g["p_over"], errors="coerce")
     g["over_hit"] = pd.to_numeric(g["over_hit"], errors="coerce")
+    g["line"] = pd.to_numeric(g["line"], errors="coerce")
     g = g.dropna(subset=["proj", "actual"])
     err = (g["proj"] - g["actual"])
+    gg = g.dropna(subset=["line", "over_hit"])
+    pred_over = gg["proj"] > gg["line"]
+    actual_over = gg["over_hit"] > 0.5
+    pred_acc = float((pred_over == actual_over).mean()) if len(gg) else None
     return {
         "n": len(g),
         "mae": err.abs().mean(),
         "bias": err.mean(),                       # + = over-projecting
-        "over_rate_pred": g["p_over"].mean(),
-        "over_rate_actual": g["over_hit"].mean(),
+        "pred_acc": pred_acc,                     # projection's over/under call vs actual
+        "pred_n": int(len(gg)),
     }
 
 
-def calibration(log: pd.DataFrame) -> pd.DataFrame:
+def prediction_breakdown(log: pd.DataFrame) -> pd.DataFrame:
+    """Directional accuracy: did the projection's over/under call (proj vs line)
+    match the actual result? Broken out by what the model predicted."""
     g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
     if g.empty:
         return pd.DataFrame()
-    g["p_over"] = pd.to_numeric(g["p_over"], errors="coerce")
+    g["proj"] = pd.to_numeric(g["proj"], errors="coerce")
+    g["line"] = pd.to_numeric(g["line"], errors="coerce")
     g["over_hit"] = pd.to_numeric(g["over_hit"], errors="coerce")
-    g = g.dropna(subset=["p_over", "over_hit"])
-    bins = [0, .4, .45, .5, .55, .6, .65, 1.01]
-    labels = ["<40%", "40-45%", "45-50%", "50-55%", "55-60%", "60-65%", "65%+"]
-    g["bucket"] = pd.cut(g["p_over"], bins=bins, labels=labels, right=False)
-    out = g.groupby("bucket", observed=True).agg(
-        n=("over_hit", "size"),
-        predicted=("p_over", "mean"),
-        actual=("over_hit", "mean")).reset_index()
-    out["gap"] = out["actual"] - out["predicted"]
-    return out
+    g = g.dropna(subset=["proj", "line", "over_hit"])
+    if g.empty:
+        return pd.DataFrame()
+    g["pred"] = g.apply(lambda r: "Over" if r["proj"] > r["line"] else "Under", axis=1)
+    g["correct"] = ((g["pred"] == "Over") == (g["over_hit"] > 0.5))
+    rows = []
+    for side in ("Over", "Under"):
+        sub = g[g["pred"] == side]
+        if len(sub):
+            rows.append({"Prediction": side, "n": int(len(sub)),
+                         "Correct": round(sub["correct"].mean() * 100)})
+    rows.append({"Prediction": "All", "n": int(len(g)),
+                 "Correct": round(g["correct"].mean() * 100)})
+    return pd.DataFrame(rows)
 
 
 # --------------------------------------------------------------------------- #

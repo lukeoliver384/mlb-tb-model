@@ -718,20 +718,16 @@ def _prop_view(plog, pbets, label):
         g2.metric("Avg error", f"{_m['mae']:.2f}")
         g3.metric("Bias (proj − actual)", f"{_m['bias']:+.2f}",
                   help="Positive = model projects too high on average")
-        g4.metric("Over rate: pred vs actual",
-                  f"{_m['over_rate_pred']*100:.0f}% / {_m['over_rate_actual']*100:.0f}%")
-        cal = T.calibration(plog)
-        if not cal.empty:
-            st.caption("Calibration — predicted P(Over) vs actual hit rate")
-            cd = cal.copy()
-            cd["predicted"] = (cd["predicted"] * 100).round(0)
-            cd["actual"] = (cd["actual"] * 100).round(0)
-            cd["gap"] = (cd["gap"] * 100).round(0)
-            st.dataframe(cd, use_container_width=True, hide_index=True,
-                         column_config={"bucket": "P(Over) bucket",
-                             "predicted": st.column_config.NumberColumn("Predicted", format="%d%%"),
-                             "actual": st.column_config.NumberColumn("Actual", format="%d%%"),
-                             "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
+        g4.metric("Prediction accuracy",
+                  f"{_m['pred_acc']*100:.0f}%" if _m.get("pred_acc") is not None else "—",
+                  help="How often the projection's over/under call (proj vs the line) matched the actual result.")
+        pb = T.prediction_breakdown(plog)
+        if not pb.empty:
+            st.caption("Prediction accuracy — projection's over/under call vs actual")
+            st.dataframe(pb, use_container_width=True, hide_index=True,
+                         column_config={
+                             "Prediction": "Model called",
+                             "Correct": st.column_config.NumberColumn("Correct", format="%d%%")})
     else:
         st.caption(f"No graded {label} projections yet.")
     _bm = T.bet_metrics(pbets)
