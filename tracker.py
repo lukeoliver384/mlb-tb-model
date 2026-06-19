@@ -510,3 +510,56 @@ def calibration_temperature(log: pd.DataFrame):
     w = min(1.0, n / 200.0)
     T_eff = 1.0 + (best_T - 1.0) * w
     return round(T_eff, 3), n
+
+
+# --------------------------------------------------------------------------- #
+# Persistent settings (e.g. starting bankroll)                                #
+# --------------------------------------------------------------------------- #
+SETTINGS_COLUMNS = ["key", "value"]
+
+
+def _settings_ws():
+    ws = _gsheet()
+    if not ws:
+        return None
+    try:
+        sh = ws.spreadsheet
+        try:
+            sws = sh.worksheet("settings")
+        except Exception:
+            sws = sh.add_worksheet(title="settings", rows=50, cols=2)
+        if not sws.row_values(1):
+            sws.append_row(SETTINGS_COLUMNS)
+        return sws
+    except Exception:
+        return None
+
+
+def get_setting(key, default=None):
+    skey = f"_set_{key}"
+    if skey in st.session_state:
+        return st.session_state[skey]
+    ws = _settings_ws()
+    try:
+        if ws:
+            for r in ws.get_all_records():
+                if str(r.get("key")) == key:
+                    st.session_state[skey] = r.get("value")
+                    return r.get("value")
+    except Exception:
+        pass
+    return default
+
+
+def set_setting(key, value):
+    st.session_state[f"_set_{key}"] = value
+    ws = _settings_ws()
+    if ws:
+        try:
+            recs = ws.get_all_records()
+            d = {str(r.get("key")): r.get("value") for r in recs}
+            d[str(key)] = value
+            ws.clear()
+            ws.update([SETTINGS_COLUMNS] + [[k, v] for k, v in d.items()])
+        except Exception:
+            pass

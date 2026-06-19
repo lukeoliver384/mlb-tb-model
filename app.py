@@ -51,54 +51,56 @@ with st.sidebar:
     date = st.date_input("Date", dt.date.today())
     season = st.number_input("Stats season", 2015, 2030, dt.date.today().year)
     prop = st.radio("Prop", ["Total Bases", "Hits + Runs + RBIs"],
-                    help="HRR: Hits is a clean matchup; Runs/RBIs are scaled by the pitcher's run-suppression + run environment (lineup context approximated).")
+                    help="HRR: Hits is a clean matchup; Runs/RBIs are scaled by the pitcher's run-suppression + run environment.")
     STAT = "TB" if prop.startswith("Total") else "HRR"
     proj_col = "Proj TB" if STAT == "TB" else "Proj HRR"
 
-    st.header("Model")
-    league_rate = st.number_input("League TB/PA", 0.30, 0.45, E.LEAGUE_TB_PER_PA, 0.001, format="%.3f")
-    reg_k = st.number_input("Regression K (PA)", 0, 600, E.REG_K_PA, 5)
-    use_splits = st.checkbox("Use L/R handedness splits", True)
-    use_homeaway = st.checkbox("Home/away splits (regressed)", True,
-                               help="Small, heavily-regressed nudge from each player's home vs away TB rate.")
-    use_park = st.checkbox("Apply park factors", True)
-    park_strength = st.slider("Park factor strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_park,
-                              help="Scales how hard park factors push. 0 = ignore parks, 1 = full Savant factor, >1 = amplify.")
-    use_weather = st.checkbox("Apply weather (Open-Meteo)", False,
-                              help="Pulls temp + wind per game; adjusts HR/XBH via wind out/in and temperature. Per-event mode only. Domes auto-neutral.")
-    weather_strength = st.slider("Weather strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_weather)
-    auto_bullpen = st.checkbox("Auto starter/bullpen split (from starter depth)", True,
-                               help="Computes each batter's share of PAs vs the starter from his batters-faced/start. Uncheck to use a single slider.")
-    sp_share_manual = st.slider("Manual share of PAs vs starter", 0.40, 1.00, 1.00, 0.05,
-                                disabled=auto_bullpen)
-    bullpen_rate = st.number_input("Bullpen TB/BF (later PAs)", 0.28, 0.42, 0.345, 0.005, format="%.3f")
+    with st.expander("Lines & staking", expanded=False):
+        default_line = st.number_input("Default TB line", 0.5, 5.5, 1.5, 0.5)
+        under_thresh = st.number_input("Under-lean threshold (Proj TB)", 0.5, 3.0, 1.35, 0.05,
+                                       help="TB: any projection below this is treated as an Under lean.")
+        min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
+        kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05,
+                               help="Fraction of full Kelly. 0.25 = quarter Kelly. Stakes are % of bankroll.")
+        max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, 5.0, 0.5,
+                                    help="Hard cap on any single bet, after Kelly fractioning.")
+        conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, 0.0, 0.05,
+                                help="Optional: pull model probability toward the market before sizing. 0 = off.")
 
-    st.header("Statcast (expected TB)")
-    use_statcast = st.checkbox("Blend Statcast expected (xSLG)", True)
-    w_statcast = st.slider("Weight on expected vs actual", 0.0, 1.0, 0.5, 0.05, disabled=not use_statcast)
+    with st.expander("Model & matchup", expanded=False):
+        league_rate = st.number_input("League TB/PA", 0.30, 0.45, E.LEAGUE_TB_PER_PA, 0.001, format="%.3f")
+        reg_k = st.number_input("Regression K (PA)", 0, 600, E.REG_K_PA, 5)
+        use_splits = st.checkbox("Use L/R handedness splits", True)
+        use_homeaway = st.checkbox("Home/away splits (regressed)", True)
+        use_components = st.checkbox("Per-event log5 (advanced)", True,
+                                     help="Project 1B/2B/3B/HR separately via log5.")
+        method = st.radio("Cover-probability method", ["Exact distribution (recommended)", "Poisson (sheet original)"])
+        use_calibration = st.checkbox("Apply calibration correction", False,
+                                      help="Re-scales probabilities from graded results. No-op until enough data.")
 
-    st.header("Recent form")
-    use_recent = st.checkbox("Blend recent form", True)
-    recent_days = st.slider("Window (days)", 7, 45, 21, disabled=not use_recent)
-    w_recent = st.slider("Weight on recent vs season", 0.0, 1.0, 0.35, 0.05, disabled=not use_recent)
-    use_components = st.checkbox("Per-event log5 (advanced)", True,
-                                help="Project 1B/2B/3B/HR separately via log5, then assemble the TB distribution.")
-    method = st.radio("Cover-probability method", ["Exact distribution (recommended)", "Poisson (sheet original)"])
-    use_calibration = st.checkbox("Apply calibration correction", False,
-                                  help="Re-scales model probabilities from your graded results (temperature). Auto-regularizes to no-op until enough data builds up.")
-    default_line = st.number_input("Default TB line", 0.5, 5.5, 1.5, 0.5)
-    under_thresh = st.number_input("Under-lean threshold (Proj TB)", 0.5, 3.0, 1.35, 0.05,
-                                   help="TB: any projection below this is treated as an Under lean.")
-    min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
-    kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05,
-                           help="Fraction of full Kelly to stake. Default 0.25 = quarter Kelly. Stakes are % of bankroll.")
-    max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, 5.0, 0.5,
-                                help="Hard cap on any single bet, applied AFTER Kelly fractioning. Guards against model overconfidence.")
-    conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, 0.0, 0.05,
-                            help="Optional: pulls the model probability toward the market before sizing. 0 = off (stake reflects the model's cover probability directly).")
+    with st.expander("Park & weather", expanded=False):
+        use_park = st.checkbox("Apply park factors", True)
+        park_strength = st.slider("Park factor strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_park)
+        use_weather = st.checkbox("Apply weather (Open-Meteo)", False,
+                                  help="Per-game temp + wind out/in on HR/XBH. Domes auto-neutral.")
+        weather_strength = st.slider("Weather strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_weather)
 
-    st.caption("Fangraphs CSV (optional) — overrides MLB-API batter TB/PA")
-    fg_csv = st.file_uploader("Fangraphs batting export (.csv)", type=["csv"])
+    with st.expander("Bullpen split", expanded=False):
+        auto_bullpen = st.checkbox("Auto starter/bullpen split", True,
+                                   help="Share of PAs vs starter from his batters-faced/start.")
+        sp_share_manual = st.slider("Manual share of PAs vs starter", 0.40, 1.00, 1.00, 0.05, disabled=auto_bullpen)
+        bullpen_rate = st.number_input("Bullpen TB/BF (later PAs)", 0.28, 0.42, 0.345, 0.005, format="%.3f")
+
+    with st.expander("Statcast & recent form", expanded=False):
+        use_statcast = st.checkbox("Blend Statcast expected (xSLG)", True)
+        w_statcast = st.slider("Weight on expected vs actual", 0.0, 1.0, 0.5, 0.05, disabled=not use_statcast)
+        use_recent = st.checkbox("Blend recent form", True)
+        recent_days = st.slider("Window (days)", 7, 45, 21, disabled=not use_recent)
+        w_recent = st.slider("Weight on recent vs season", 0.0, 1.0, 0.35, 0.05, disabled=not use_recent)
+
+    with st.expander("Fangraphs CSV (optional)", expanded=False):
+        st.caption("Overrides MLB-API batter TB/PA")
+        fg_csv = st.file_uploader("Fangraphs batting export (.csv)", type=["csv"])
 
 fg_rates = D.load_fangraphs_csv(fg_csv) if fg_csv else {}
 
@@ -383,11 +385,7 @@ st.dataframe(
         "Wx": st.column_config.TextColumn("Weather"),
     })
 
-# --- Why the strong picks ---
-st.subheader("Why the strong picks")
-st.caption("High cover-probability leans with the drivers behind them. The stars = how well-founded "
-           "the number is (sample size + split depth) — a strong % on thin data gets fewer stars.")
-
+# --- Why the strong picks (collapsed) ---
 def _summary(row):
     p_over = float(row["P(Over)"])
     sidelbl = row.get("Lean", "Over" if p_over >= 0.5 else "Under")
@@ -412,14 +410,16 @@ _strong["_p_side"] = _strong.apply(
     lambda r: float(r["P(Over)"]) if r["Lean"] == "Over" else 1 - float(r["P(Over)"]), axis=1)
 _strong["_lean"] = _strong["_p_side"]
 _strong = _strong[_strong["_p_side"] >= 0.56].sort_values("_p_side", ascending=False).head(3)
-if _strong.empty:
-    st.caption("No strong leans on this slate (no side at 57%+).")
-else:
-    for _, _row in _strong.iterrows():
-        _stars = "★" * int(_row.get("Conf", 3))
-        _side = _row["Lean"]
-        with st.expander(f"{_row['Batter']} — {_side} {_row['Line']} · "
-                         f"{_row['_p_side']*100:.0f}% · {_stars}"):
+with st.expander("Why the strong picks — top leans + reasoning", expanded=False):
+    st.caption("Top cover-probability leans with their drivers. Stars = data confidence (sample/splits).")
+    if _strong.empty:
+        st.caption("No strong leans on this slate (no side at 57%+).")
+    else:
+        for _, _row in _strong.iterrows():
+            _stars = "★" * int(_row.get("Conf", 3))
+            _side = _row["Lean"]
+            st.markdown(f"**{_row['Batter']} — {_side} {_row['Line']} · "
+                        f"{_row['_p_side']*100:.0f}% · {_stars}**")
             st.markdown(_summary(_row))
             _brk = {
                 "Regressed batter rate": _row.get("_b_rate"),
@@ -434,6 +434,7 @@ else:
                 "Confidence (data)": _stars,
             }
             st.table(pd.DataFrame(list(_brk.items()), columns=["Factor", "Value"]))
+            st.divider()
 
 st.subheader("Add your odds")
 st.caption("Enter the Over and/or Under price (American) for each batter. The model checks BOTH sides "
@@ -695,8 +696,19 @@ with tc2:
 
 _log = T.read_log()
 _bets = T.read_bets()
-start_bk = st.number_input("Starting bankroll (units)", 1.0, 1_000_000.0, 100.0, 10.0,
-                           help="Each prop's bankroll curve compounds its own bets from this starting point.")
+_bk_default = 100.0
+try:
+    _bk_default = float(T.get_setting("start_bankroll", 100.0) or 100.0)
+except (ValueError, TypeError):
+    _bk_default = 100.0
+start_bk = st.number_input("Starting bankroll (units)", 1.0, 1_000_000.0, _bk_default, 10.0,
+                           key="start_bk",
+                           help="Remembered across sessions. Each prop's bankroll curve compounds its own bets from here.")
+if float(start_bk) != _bk_default:
+    try:
+        T.set_setting("start_bankroll", float(start_bk))
+    except Exception:
+        pass
 
 def _prop_view(plog, pbets, label):
     _m = T.metrics(plog)
