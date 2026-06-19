@@ -137,6 +137,7 @@ def grade(season: int) -> int:
     log = read_log()
     if log.empty:
         return 0
+    log = log.astype(object)
     today = dt.date.today().isoformat()
     finals = {}
     n = 0
@@ -284,6 +285,7 @@ def grade_bets(season: int) -> int:
     bets = read_bets()
     if bets.empty:
         return 0
+    bets = bets.astype(object)
     today = dt.date.today().isoformat()
     finals = {}
     n = 0
