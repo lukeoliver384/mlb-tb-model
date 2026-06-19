@@ -26,6 +26,14 @@ LOG_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "prop"
                "proj", "p_over", "actual", "over_hit", "graded"]
 LOG_CSV = "tracker_log.csv"
 
+
+def _iso(x):
+    """Normalize any date representation (incl. sheet-coerced M/D/YYYY) to YYYY-MM-DD."""
+    try:
+        return pd.to_datetime(x).date().isoformat()
+    except Exception:
+        return str(x)
+
 BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "side", "prop",
                "odds", "stake", "actual", "result", "profit", "graded"]
 BET_CSV = "tracker_bets.csv"
@@ -144,7 +152,7 @@ def grade(season: int) -> int:
     for i, row in log.iterrows():
         if str(row.get("graded")) in ("1", "1.0", "True"):
             continue
-        d = str(row["date"])
+        d = _iso(row["date"])
         if d > today:
             continue
         if d == today:  # only grade games already Final
@@ -160,7 +168,7 @@ def grade(season: int) -> int:
             continue
         prop = str(row.get("prop") or "TB").upper()
         fn = D.player_hrr_on_date if prop == "HRR" else D.player_tb_on_date
-        actual = fn(bid, season, str(row["date"]))
+        actual = fn(bid, season, d)
         if actual is None:
             continue
         log.at[i, "actual"] = actual
@@ -292,7 +300,7 @@ def grade_bets(season: int) -> int:
     for i, row in bets.iterrows():
         if str(row.get("graded")) in ("1", "1.0", "True"):
             continue
-        d = str(row["date"])
+        d = _iso(row["date"])
         if d > today:
             continue
         if d == today:
@@ -307,7 +315,7 @@ def grade_bets(season: int) -> int:
             continue
         prop = str(row.get("prop") or "TB").upper()
         fn = D.player_hrr_on_date if prop == "HRR" else D.player_tb_on_date
-        actual = fn(bid, season, str(row["date"])) if bid else None
+        actual = fn(bid, season, d) if bid else None
         if actual is None:
             bets.at[i, "result"] = "void"; bets.at[i, "profit"] = 0.0
             bets.at[i, "actual"] = ""; bets.at[i, "graded"] = 1; n += 1
