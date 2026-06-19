@@ -8,6 +8,7 @@ download required.
 """
 
 import datetime as dt
+import math
 
 import pandas as pd
 import streamlit as st
@@ -83,7 +84,11 @@ with st.sidebar:
     use_components = st.checkbox("Per-event log5 (advanced)", True,
                                 help="Project 1B/2B/3B/HR separately via log5, then assemble the TB distribution.")
     method = st.radio("Cover-probability method", ["Exact distribution (recommended)", "Poisson (sheet original)"])
+    use_calibration = st.checkbox("Apply calibration correction", False,
+                                  help="Re-scales model probabilities from your graded results (temperature). Auto-regularizes to no-op until enough data builds up.")
     default_line = st.number_input("Default TB line", 0.5, 5.5, 1.5, 0.5)
+    under_thresh = st.number_input("Under-lean threshold (Proj TB)", 0.5, 3.0, 1.35, 0.05,
+                                   help="TB: any projection below this is treated as an Under lean.")
     min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
     kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05,
                            help="Fraction of full Kelly to stake. Default 0.25 = quarter Kelly. Stakes are % of bankroll.")
@@ -115,6 +120,10 @@ def load(date_str: str, season: int, want_recent: bool, recent_days: int, want_w
 def load_savant(season: int):
     return D.load_savant_expected(season, "batter"), D.load_savant_expected(season, "pitcher")
 
+@st.cache_data(ttl=600, show_spinner=False)
+def load_calibration():
+    return T.calibration_temperature(T.read_log())
+
 colA, colB = st.columns([1, 5])
 with colA:
     go = st.button("Load slate", type="primary")
@@ -132,6 +141,18 @@ if not slate:
     st.info("Pick a date and click **Load slate**. Lineups appear ~3–4 hours before first pitch; "
             "until then you'll see probable pitchers but empty lineups.")
     st.stop()
+
+T_cal, T_caln = load_calibration() if use_calibration else (1.0, 0)
+
+def _calibrate(p):
+    if not use_calibration or T_cal == 1.0 or not (0 < p < 1):
+        return p
+    lp = math.log(p / (1 - p)) / T_cal
+    return 1.0 / (1.0 + math.exp(-lp))
+
+if use_calibration:
+    st.caption(f"Calibration on: temperature {T_cal} from {T_caln} graded legs "
+               f"({'compressing — model was overconfident' if T_cal > 1 else ('expanding — underconfident' if T_cal < 1 else 'no change yet')}).")
 
 
 # --------------------------------------------------------------------------- #
@@ -178,6 +199,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
                 b.runs_per_pa * ha, b.rbi_per_pa * ha, opp_pitcher.r_per_bf,
                 line=default_line, side="Over", expected_pa=total_pa,
                 park_hits=pmult, park_runs=park_runs, reg_k=int(reg_k))
+            p_cover = _calibrate(p_cover)
             rows.append({
                 "Batter": b.name, "Slot": b.order, "B": b.bats,
                 "vs Pitcher": opp_pitcher.name, "P": opp_pitcher.throws,
@@ -244,6 +266,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
         )
         r = E.project(inp)
         p_cover = r.p_cover if method.startswith("Exact") else r.p_cover_poisson
+        p_cover = _calibrate(p_cover)
         rows.append({
             "Batter": b.name, "Slot": b.order, "B": b.bats,
             "vs Pitcher": opp_pitcher.name, "P": opp_pitcher.throws,
@@ -306,6 +329,13 @@ if go or st.session_state.get("proj_df") is None or _proj_stale:
     st.session_state["proj_meta"] = (date.isoformat(), STAT)
 
 df = st.session_state["proj_df"]
+
+def _lean(row):
+    if STAT == "TB" and float(row[proj_col]) < under_thresh:
+        return "Under"
+    return "Over" if float(row["P(Over)"]) >= 0.5 else "Under"
+df["Lean"] = df.apply(_lean, axis=1)
+
 bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"], r.get("Venue", ""))
            for _, r in df.iterrows()}
 dist_map = {(r["Game"], r["Batter"]): r.get("_dist") for _, r in df.iterrows()}
@@ -316,10 +346,10 @@ def cover_at(game, batter, line, side="Over"):
     k = (game, batter)
     d = dist_map.get(k)
     if d is not None:
-        return E.p_cover_from_dist(list(d), line, side)
+        return _calibrate(E.p_cover_from_dist(list(d), line, side))
     lam = lam_map.get(k)
     if lam is not None:
-        return E.p_cover_poisson(float(lam), line, side)
+        return _calibrate(E.p_cover_poisson(float(lam), line, side))
     return None
 _fd, _fs = st.session_state.get("proj_meta", ("", STAT))
 st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
@@ -338,7 +368,7 @@ st.write("")
 st.subheader("Projections")
 st.caption(f"Every hitter vs the opposing starter, sorted by projected {STAT}. Add odds below for edges.")
 view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
-             "vsSP%", proj_col, "P(Over)", "Fair Over odds", "Conf", "Venue", "Wx"]
+             "vsSP%", proj_col, "P(Over)", "Lean", "Fair Over odds", "Conf", "Venue", "Wx"]
 dfv = df[view_cols].sort_values(proj_col, ascending=False).copy()
 dfv["P(Over)"] = dfv["P(Over)"] * 100
 dfv["Conf"] = dfv["Conf"].apply(lambda n: "★" * int(n) if pd.notna(n) else "")
@@ -361,8 +391,8 @@ st.caption("High cover-probability leans with the drivers behind them. The stars
 
 def _summary(row):
     p_over = float(row["P(Over)"])
-    sidelbl = "Over" if p_over >= 0.5 else "Under"
-    lp = max(p_over, 1 - p_over)
+    sidelbl = row.get("Lean", "Over" if p_over >= 0.5 else "Under")
+    lp = p_over if sidelbl == "Over" else 1 - p_over
     bits = [f"{row.get('B','?')}-bat vs {row.get('P','?')}HP {row.get('vs Pitcher','')}".strip()]
     pk = row.get("_park", 1.0) or 1.0
     if pk >= 1.03:
@@ -379,16 +409,18 @@ def _summary(row):
             + "; ".join(bits) + f". Based on {samp}.")
 
 _strong = df.copy()
-_strong["_lean"] = _strong["P(Over)"].apply(lambda p: max(float(p), 1 - float(p)))
-_strong = _strong[_strong["_lean"] >= 0.56].sort_values("_lean", ascending=False).head(3)
+_strong["_p_side"] = _strong.apply(
+    lambda r: float(r["P(Over)"]) if r["Lean"] == "Over" else 1 - float(r["P(Over)"]), axis=1)
+_strong["_lean"] = _strong["_p_side"]
+_strong = _strong[_strong["_p_side"] >= 0.56].sort_values("_p_side", ascending=False).head(3)
 if _strong.empty:
     st.caption("No strong leans on this slate (no side at 57%+).")
 else:
     for _, _row in _strong.iterrows():
         _stars = "★" * int(_row.get("Conf", 3))
-        _side = "Over" if float(_row["P(Over)"]) >= 0.5 else "Under"
+        _side = _row["Lean"]
         with st.expander(f"{_row['Batter']} — {_side} {_row['Line']} · "
-                         f"{_row['_lean']*100:.0f}% · {_stars}"):
+                         f"{_row['_p_side']*100:.0f}% · {_stars}"):
             st.markdown(_summary(_row))
             _brk = {
                 "Regressed batter rate": _row.get("_b_rate"),
@@ -653,53 +685,60 @@ with tc2:
             st.error(f"Re-grade failed: {ex}")
 
 _log = T.read_log()
-_m = T.metrics(_log)
-if _m:
-    g1, g2, g3, g4 = st.columns(4)
-    g1.metric("Graded", _m["n"])
-    g2.metric("Avg TB error", f"{_m['mae']:.2f}")
-    g3.metric("Bias (proj − actual)", f"{_m['bias']:+.2f}",
-              help="Positive = the model projects too high on average")
-    g4.metric("Over rate: pred vs actual",
-              f"{_m['over_rate_pred']*100:.0f}% / {_m['over_rate_actual']*100:.0f}%")
-    cal = T.calibration(_log)
-    if not cal.empty:
-        st.caption("Calibration — predicted P(Over) vs actual hit rate by bucket")
-        cal_disp = cal.copy()
-        cal_disp["predicted"] = (cal_disp["predicted"] * 100).round(0)
-        cal_disp["actual"] = (cal_disp["actual"] * 100).round(0)
-        cal_disp["gap"] = (cal_disp["gap"] * 100).round(0)
-        st.dataframe(cal_disp, use_container_width=True, hide_index=True,
-                     column_config={
-                         "bucket": "P(Over) bucket",
-                         "predicted": st.column_config.NumberColumn("Predicted", format="%d%%"),
-                         "actual": st.column_config.NumberColumn("Actual", format="%d%%"),
-                         "gap": st.column_config.NumberColumn("Gap", format="%+d pts"),
-                     })
-else:
-    st.info("No graded results yet. Log a slate, and after the games play, click **Grade past results**.")
-
 _bets = T.read_bets()
-_bm = T.bet_metrics(_bets)
-if _bm:
-    st.caption("Betting P&L — graded bets")
-    b1, b2, b3, b4 = st.columns(4)
-    b1.metric("Record", _bm["record"])
-    b2.metric("Win rate", f"{_bm['win_rate']*100:.0f}%")
-    b3.metric("Units P&L", f"{_bm['units_profit']:+.2f}", help=f"{_bm['n']} graded bets, {_bm['units_staked']:.1f}u staked")
-    b4.metric("ROI", f"{_bm['roi']*100:+.1f}%")
+start_bk = st.number_input("Starting bankroll (units)", 1.0, 1_000_000.0, 100.0, 10.0,
+                           help="Each prop's bankroll curve compounds its own bets from this starting point.")
 
-    start_bk = st.number_input("Starting bankroll (units)", 1.0, 1_000_000.0, 100.0, 10.0,
-                               help="Kelly stakes are % of bankroll, so the curve compounds from here.")
-    curve = T.bankroll_curve(_bets, start_bk)
-    if not curve.empty:
-        bs = T.bankroll_stats(curve, start_bk)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Current bankroll", f"{bs['current']:.1f}", f"{bs['growth_pct']:+.1f}%")
-        c2.metric("Peak", f"{bs['peak']:.1f}")
-        c3.metric("Max drawdown", f"{bs['max_drawdown_pct']:.1f}%")
-        st.line_chart(curve.set_index("n")["bankroll"], height=240,
-                      x_label="settled bets", y_label="bankroll")
+def _prop_view(plog, pbets, label):
+    _m = T.metrics(plog)
+    if _m:
+        g1, g2, g3, g4 = st.columns(4)
+        g1.metric("Graded", _m["n"])
+        g2.metric("Avg error", f"{_m['mae']:.2f}")
+        g3.metric("Bias (proj − actual)", f"{_m['bias']:+.2f}",
+                  help="Positive = model projects too high on average")
+        g4.metric("Over rate: pred vs actual",
+                  f"{_m['over_rate_pred']*100:.0f}% / {_m['over_rate_actual']*100:.0f}%")
+        cal = T.calibration(plog)
+        if not cal.empty:
+            st.caption("Calibration — predicted P(Over) vs actual hit rate")
+            cd = cal.copy()
+            cd["predicted"] = (cd["predicted"] * 100).round(0)
+            cd["actual"] = (cd["actual"] * 100).round(0)
+            cd["gap"] = (cd["gap"] * 100).round(0)
+            st.dataframe(cd, use_container_width=True, hide_index=True,
+                         column_config={"bucket": "P(Over) bucket",
+                             "predicted": st.column_config.NumberColumn("Predicted", format="%d%%"),
+                             "actual": st.column_config.NumberColumn("Actual", format="%d%%"),
+                             "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
+    else:
+        st.caption(f"No graded {label} projections yet.")
+    _bm = T.bet_metrics(pbets)
+    if _bm:
+        st.caption("Betting P&L — graded bets")
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("Record", _bm["record"])
+        b2.metric("Win rate", f"{_bm['win_rate']*100:.0f}%")
+        b3.metric("Units P&L", f"{_bm['units_profit']:+.2f}", help=f"{_bm['n']} bets, {_bm['units_staked']:.1f}u staked")
+        b4.metric("ROI", f"{_bm['roi']*100:+.1f}%")
+        curve = T.bankroll_curve(pbets, start_bk)
+        if not curve.empty:
+            bs = T.bankroll_stats(curve, start_bk)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Current bankroll", f"{bs['current']:.1f}", f"{bs['growth_pct']:+.1f}%")
+            c2.metric("Peak", f"{bs['peak']:.1f}")
+            c3.metric("Max drawdown", f"{bs['max_drawdown_pct']:.1f}%")
+            st.line_chart(curve.set_index("n")["bankroll"], height=240,
+                          x_label="settled bets", y_label="bankroll")
+    else:
+        st.caption(f"No graded {label} bets yet.")
+
+_tabs = st.tabs(["Total Bases", "Hits + Runs + RBIs"])
+for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
+    with _tab:
+        _pl = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
+        _pb = _bets[_bets["prop"].astype(str).str.upper() == _pp] if not _bets.empty else _bets
+        _prop_view(_pl, _pb, _lbl)
 
 with st.expander("Recent graded results (verify)"):
     _isdone = lambda d: d["graded"].astype(str).isin(["1", "1.0", "True"])
