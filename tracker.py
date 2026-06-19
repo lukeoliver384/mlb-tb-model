@@ -150,7 +150,7 @@ def grade(season: int) -> int:
         if d == today:  # only grade games already Final
             if d not in finals:
                 finals[d] = D.final_venues(d)
-            if str(row.get("venue", "")) not in finals[d]:
+            if str(row.get("venue", "")).strip() not in finals[d]:
                 continue
         try:
             bid = int(row["batter_id"])
@@ -298,7 +298,7 @@ def grade_bets(season: int) -> int:
         if d == today:
             if d not in finals:
                 finals[d] = D.final_venues(d)
-            if str(row.get("venue", "")) not in finals[d]:
+            if str(row.get("venue", "")).strip() not in finals[d]:
                 continue
         try:
             bid = int(row["batter_id"])
@@ -468,3 +468,45 @@ def reset_grades():
         bets = bets.astype(object)
         bets["graded"] = 0; bets["actual"] = None; bets["result"] = None; bets["profit"] = None
         write_bets(bets)
+
+
+def calibration_temperature(log: pd.DataFrame):
+    """
+    Fit a probability 'temperature' from graded projections to correct over/under-
+    confidence. T>1 = model overconfident (compress toward 50%); T<1 = underconfident.
+    Heavily regularized toward T=1 (no change) until enough resolved legs accumulate,
+    so early/small samples barely move it. Returns (T_effective, n_resolved).
+    """
+    import math
+    if log is None or log.empty:
+        return 1.0, 0
+    g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    g["p"] = pd.to_numeric(g["p_over"], errors="coerce")
+    g["y"] = pd.to_numeric(g["over_hit"], errors="coerce")
+    g = g.dropna(subset=["p", "y"])
+    n = len(g)
+    if n < 30:
+        return 1.0, n
+    ps = [min(max(float(p), 1e-4), 1 - 1e-4) for p in g["p"]]
+    ys = [float(y) for y in g["y"]]
+
+    def logloss(T):
+        s = 0.0
+        for p, y in zip(ps, ys):
+            lp = math.log(p / (1 - p)) / T
+            q = 1.0 / (1.0 + math.exp(-lp))
+            q = min(max(q, 1e-6), 1 - 1e-6)
+            s += -(y * math.log(q) + (1 - y) * math.log(1 - q))
+        return s / len(ps)
+
+    best_T, best_ll = 1.0, logloss(1.0)
+    T = 0.5
+    while T <= 3.0001:
+        ll = logloss(T)
+        if ll < best_ll:
+            best_ll, best_T = ll, T
+        T += 0.05
+    # regularize toward 1.0 by sample size (full weight ~200 resolved legs)
+    w = min(1.0, n / 200.0)
+    T_eff = 1.0 + (best_T - 1.0) * w
+    return round(T_eff, 3), n

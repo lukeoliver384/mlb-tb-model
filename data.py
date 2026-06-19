@@ -426,14 +426,20 @@ def load_fangraphs_csv(path_or_buffer):
 # Recent form (MLB StatsAPI byDateRange)                                       #
 # --------------------------------------------------------------------------- #
 def final_venues(date: str) -> set:
-    """Set of venue names whose games are Final on the given date (for as-you-go grading)."""
+    """Set of venue names whose games are complete on the date (for as-you-go grading)."""
     try:
         data = _get(f"{STATSAPI}/schedule", sportId=1, date=date)
         out = set()
         for d in data.get("dates", []):
             for g in d.get("games", []):
-                if g.get("status", {}).get("abstractGameState", "") == "Final":
-                    out.add(g.get("venue", {}).get("name", ""))
+                s = g.get("status", {})
+                detailed = str(s.get("detailedState", "")).lower()
+                final = (s.get("abstractGameState") == "Final"
+                         or s.get("codedGameState") in ("F", "O")
+                         or "final" in detailed or detailed == "game over"
+                         or "completed" in detailed)
+                if final:
+                    out.add((g.get("venue", {}).get("name", "") or "").strip())
         return out
     except Exception:
         return set()
