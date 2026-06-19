@@ -456,24 +456,34 @@ def _okey(game, batter):
 def _pf(g, b, side):
     return str(odds_store.get(_okey(g, b), {}).get(side, "") or "")
 
+def _pf_line(g, b):
+    v = odds_store.get(_okey(g, b), {}).get("line", None)
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return float(default_line)
+
 _basekey = f"odds_base_{date.isoformat()}_{STAT}"
 _edkey = f"odds_ed_{date.isoformat()}_{STAT}"
 _odds_active = (date.isoformat(), STAT)
 # Rebuild (pre-filled from the saved store) on load OR whenever prop/date changes,
-# so switching props restores each prop's saved odds. Stable within a prop so edits don't revert.
+# so switching props restores each prop's saved odds + lines. Stable within a prop so edits don't revert.
 if go or _basekey not in st.session_state or st.session_state.get("_odds_active") != _odds_active:
-    base = df[["Game", "Batter", "Line", "P(Over)"]].copy()
+    base = df[["Game", "Batter"]].copy()
+    base["Line"] = [_pf_line(g, b) for g, b in zip(base["Game"], base["Batter"])]
     base["Over odds"] = pd.Series([_pf(g, b, "over") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
     base["Under odds"] = pd.Series([_pf(g, b, "under") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
     st.session_state[_basekey] = base
     st.session_state.pop(_edkey, None)
 st.session_state["_odds_active"] = _odds_active
 
+st.caption("Edit **Line** per player for alt lines (e.g. 0.5 / 2.5) — the cover probability and edges recompute at the line you set.")
 edited = st.data_editor(
     st.session_state[_basekey], key=_edkey,
     use_container_width=True, hide_index=True,
-    disabled=["Game", "Batter", "Line", "P(Over)"],
+    disabled=["Game", "Batter"],
     column_config={
+        "Line": st.column_config.NumberColumn("Line", step=0.5, help="Alt line per player; cover prob recomputes here."),
         "Over odds": st.column_config.TextColumn("Over odds", help="American odds, e.g. +120 or -110"),
         "Under odds": st.column_config.TextColumn("Under odds", help="American odds, e.g. +120 or -110"),
     })
