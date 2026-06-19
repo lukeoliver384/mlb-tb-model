@@ -120,10 +120,6 @@ def load(date_str: str, season: int, want_recent: bool, recent_days: int, want_w
 def load_savant(season: int):
     return D.load_savant_expected(season, "batter"), D.load_savant_expected(season, "pitcher")
 
-@st.cache_data(ttl=600, show_spinner=False)
-def load_calibration():
-    return T.calibration_temperature(T.read_log())
-
 colA, colB = st.columns([1, 5])
 with colA:
     go = st.button("Load slate", type="primary")
@@ -142,7 +138,10 @@ if not slate:
             "until then you'll see probable pitchers but empty lineups.")
     st.stop()
 
-T_cal, T_caln = load_calibration() if use_calibration else (1.0, 0)
+try:
+    T_cal, T_caln = T.calibration_temperature(T.read_log()) if use_calibration else (1.0, 0)
+except Exception:
+    T_cal, T_caln = 1.0, 0
 
 def _calibrate(p):
     if not use_calibration or T_cal == 1.0 or not (0 < p < 1):
