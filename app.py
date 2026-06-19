@@ -643,6 +643,14 @@ with tc2:
             st.success(f"Graded {n} projections and {nb} bets.")
         except Exception as ex:
             st.error(f"Grade failed: {ex}")
+    if st.button("Re-grade everything (reset)", help="Clears old grades and re-grades with the current data source. Use after a grading fix."):
+        try:
+            T.reset_grades()
+            n = T.grade(int(season))
+            nb = T.grade_bets(int(season))
+            st.success(f"Reset + re-graded {n} projections and {nb} bets.")
+        except Exception as ex:
+            st.error(f"Re-grade failed: {ex}")
 
 _log = T.read_log()
 _m = T.metrics(_log)
@@ -692,3 +700,18 @@ if _bm:
         c3.metric("Max drawdown", f"{bs['max_drawdown_pct']:.1f}%")
         st.line_chart(curve.set_index("n")["bankroll"], height=240,
                       x_label="settled bets", y_label="bankroll")
+
+with st.expander("Recent graded results (verify)"):
+    _isdone = lambda d: d["graded"].astype(str).isin(["1", "1.0", "True"])
+    _gl = _log[_isdone(_log)] if not _log.empty else _log
+    if _gl is not None and not _gl.empty:
+        st.caption("Projections graded vs actual")
+        st.dataframe(_gl[["date", "batter", "prop", "line", "proj", "actual", "over_hit"]].tail(40),
+                     use_container_width=True, hide_index=True)
+    _gb = _bets[_isdone(_bets)] if not _bets.empty else _bets
+    if _gb is not None and not _gb.empty:
+        st.caption("Bets graded")
+        st.dataframe(_gb[["date", "batter", "prop", "line", "side", "odds", "stake", "actual", "result", "profit"]].tail(40),
+                     use_container_width=True, hide_index=True)
+    if (_gl is None or _gl.empty) and (_gb is None or _gb.empty):
+        st.caption("Nothing graded yet.")

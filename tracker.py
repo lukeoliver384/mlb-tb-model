@@ -454,3 +454,17 @@ def write_odds(store: dict) -> str:
     except Exception:
         pass
     return "local"
+
+
+def reset_grades():
+    """Clear all grade results so they re-grade with the current logic/data source."""
+    log = read_log()
+    if not log.empty:
+        log = log.astype(object)
+        log["graded"] = 0; log["actual"] = None; log["over_hit"] = None
+        write_log(log)
+    bets = read_bets()
+    if not bets.empty:
+        bets = bets.astype(object)
+        bets["graded"] = 0; bets["actual"] = None; bets["result"] = None; bets["profit"] = None
+        write_bets(bets)

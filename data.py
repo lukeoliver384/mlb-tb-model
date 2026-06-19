@@ -439,26 +439,32 @@ def final_venues(date: str) -> set:
         return set()
 
 
+def _gamelog_on_date(pid: int, season: int, date: str):
+    """Return list of per-game hitting stat dicts for a player on a date (sums doubleheaders)."""
+    d = _get(f"{STATSAPI}/people/{pid}/stats",
+             stats="gameLog", group="hitting", season=season, sportId=1)
+    return [s["stat"] for s in d["stats"][0]["splits"] if s.get("date") == date]
+
+
 def player_tb_on_date(pid: int, season: int, date: str):
-    """Actual total bases for a player on a given date (YYYY-MM-DD). None if DNP/missing."""
+    """Actual total bases on a date (YYYY-MM-DD) from the game log. None if DNP."""
     try:
-        d = _get(f"{STATSAPI}/people/{pid}/stats",
-                 stats="byDateRange", group="hitting", season=season, sportId=1,
-                 startDate=date, endDate=date)
-        st = d["stats"][0]["splits"][0]["stat"]
-        return float(st.get("totalBases", 0))
+        games = _gamelog_on_date(pid, season, date)
+        if not games:
+            return None
+        return float(sum(float(st.get("totalBases", 0)) for st in games))
     except Exception:
         return None
 
 
 def player_hrr_on_date(pid: int, season: int, date: str):
-    """Actual Hits+Runs+RBIs for a player on a date. None if DNP/missing."""
+    """Actual Hits+Runs+RBIs on a date from the game log. None if DNP."""
     try:
-        d = _get(f"{STATSAPI}/people/{pid}/stats",
-                 stats="byDateRange", group="hitting", season=season, sportId=1,
-                 startDate=date, endDate=date)
-        st = d["stats"][0]["splits"][0]["stat"]
-        return float(st.get("hits", 0)) + float(st.get("runs", 0)) + float(st.get("rbi", 0))
+        games = _gamelog_on_date(pid, season, date)
+        if not games:
+            return None
+        return float(sum(float(st.get("hits", 0)) + float(st.get("runs", 0)) + float(st.get("rbi", 0))
+                         for st in games))
     except Exception:
         return None
 
