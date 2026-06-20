@@ -23,7 +23,7 @@ import data as D
 import engine as E
 
 LOG_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "prop",
-               "proj", "p_over", "actual", "over_hit", "graded"]
+               "proj", "pred_side", "p_over", "actual", "actual_side", "over_hit", "correct", "graded"]
 LOG_CSV = "tracker_log.csv"
 
 
@@ -129,8 +129,10 @@ def log_projections(proj_df: pd.DataFrame, date_str: str,
         "line": proj_df["Line"],
         "prop": prop,
         "proj": proj_df[proj_col],
+        "pred_side": ["Over" if float(p) > float(l) else "Under"
+                      for p, l in zip(proj_df[proj_col], proj_df["Line"])],
         "p_over": proj_df["P(Over)"],
-        "actual": None, "over_hit": None, "graded": 0,
+        "actual": None, "actual_side": None, "over_hit": None, "correct": None, "graded": 0,
     })
     log = read_log()
     if not log.empty:
@@ -171,8 +173,18 @@ def grade(season: int) -> int:
         actual = fn(bid, season, d)
         if actual is None:
             continue
+        ln = float(row["line"])
+        a_side = "Over" if actual > ln else "Under"
+        pred = str(row.get("pred_side") or "")
+        if pred not in ("Over", "Under"):
+            try:
+                pred = "Over" if float(row.get("proj")) > ln else "Under"
+            except (ValueError, TypeError):
+                pred = ""
         log.at[i, "actual"] = actual
-        log.at[i, "over_hit"] = int(actual > float(row["line"]))
+        log.at[i, "actual_side"] = a_side
+        log.at[i, "over_hit"] = int(actual > ln)
+        log.at[i, "correct"] = 1 if pred == a_side else 0
         log.at[i, "graded"] = 1
         n += 1
     if n:

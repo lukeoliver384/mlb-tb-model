@@ -513,6 +513,115 @@ if _oh != st.session_state.get("_odds_hash"):
         pass
     st.session_state["_odds_hash"] = _oh
 
+with st.expander("Import odds (paste or CSV) — auto-fill the table", expanded=False):
+    st.caption("Columns: Player, Line, Over, Under (header optional; comma or tab separated). "
+               "Paste from BettingPros or a sheet, or upload a CSV. Matches by player name; "
+               "any column you omit is just skipped.")
+    _imp_csv = st.file_uploader("CSV", type=["csv"], key="imp_csv")
+    _imp_txt = st.text_area("…or paste rows here", height=130, key="imp_txt",
+                            placeholder="Aaron Judge, 1.5, +120, -150")
+    if st.button("Import odds"):
+        import io, re, unicodedata
+
+        def _rows_from_df(d):
+            d = d.copy()
+            d.columns = [str(c).strip().lower() for c in d.columns]
+            def col(*names):
+                for n in names:
+                    for c in d.columns:
+                        if n in str(c):
+                            return c
+                return None
+            pcol, lcol, ocol, ucol = col("player", "name", "batter"), col("line"), col("over"), col("under")
+            out = []
+            if pcol is None:
+                cols = list(d.columns)
+                for _, r in d.iterrows():
+                    v = [r[c] for c in cols]
+                    if not v or str(v[0]).strip().lower() in ("player", "name", "batter"):
+                        continue
+                    out.append({"player": v[0],
+                                "line": v[1] if len(v) > 1 else None,
+                                "over": v[2] if len(v) > 2 else None,
+                                "under": v[3] if len(v) > 3 else None})
+            else:
+                for _, r in d.iterrows():
+                    out.append({"player": r.get(pcol),
+                                "line": r.get(lcol) if lcol else None,
+                                "over": r.get(ocol) if ocol else None,
+                                "under": r.get(ucol) if ucol else None})
+            return out
+
+        rows = []
+        if _imp_csv is not None:
+            try:
+                rows += _rows_from_df(pd.read_csv(_imp_csv, dtype=str))
+            except Exception as ex:
+                st.error(f"CSV parse failed: {ex}")
+        if _imp_txt and _imp_txt.strip():
+            try:
+                sep = "\t" if "\t" in _imp_txt else ","
+                rows += _rows_from_df(pd.read_csv(io.StringIO(_imp_txt), sep=sep, dtype=str, header=None))
+            except Exception as ex:
+                st.error(f"Paste parse failed: {ex}")
+
+        def _norm(s):
+            s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+            return re.sub(r"\s+", " ", re.sub(r"[^a-z ]", "", s.lower())).strip()
+
+        _exact, _liname = {}, {}
+        for _, r in df.iterrows():
+            n = _norm(r["Batter"])
+            _exact[n] = (r["Game"], r["Batter"])
+            p = n.split()
+            if len(p) >= 2:
+                _liname[(p[0][:1], p[-1])] = (r["Game"], r["Batter"])
+
+        def _match(name):
+            n = _norm(name)
+            if n in _exact:
+                return _exact[n]
+            p = n.split()
+            if len(p) >= 2 and (p[0][:1], p[-1]) in _liname:
+                return _liname[(p[0][:1], p[-1])]
+            for k, v in _exact.items():
+                if p and k.split()[-1] == p[-1]:
+                    return v
+            return None
+
+        matched, unmatched = 0, []
+        for row in rows:
+            if not row.get("player"):
+                continue
+            key = _match(row["player"])
+            if not key:
+                unmatched.append(str(row["player"]).strip())
+                continue
+            rec = dict(odds_store.get(_okey(*key), {}))
+            try:
+                if row.get("line") not in (None, "") and not pd.isna(row.get("line")):
+                    rec["line"] = float(row["line"])
+            except (ValueError, TypeError):
+                pass
+            for side in ("over", "under"):
+                v = row.get(side)
+                if v is not None and str(v).strip() and str(v).strip().lower() != "nan":
+                    rec[side] = str(v).strip().replace(" ", "")
+            if rec:
+                odds_store[_okey(*key)] = rec
+                matched += 1
+        st.session_state.pop(_basekey, None)
+        st.session_state.pop(_edkey, None)
+        try:
+            T.write_odds(odds_store)
+        except Exception:
+            pass
+        msg = f"Imported odds for {matched} players."
+        if unmatched:
+            msg += f" Unmatched ({len(unmatched)}): " + ", ".join(unmatched[:8])
+        st.success(msg)
+        st.rerun()
+
 def _num(x):
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
@@ -606,11 +715,19 @@ if results:
     st.markdown("**Log the plays you're betting**")
     st.caption("Stake defaults to the suggested fractional-Kelly size (% of bankroll). "
                "Tick the plays you took, adjust stakes if needed, then tap to log them to your sheet.")
-    bet_edit = rdf[["Game", "Batter", "Side", "Line", "Odds"]].copy()
-    bet_edit.insert(0, "Bet", False)
-    bet_edit["Stake (u)"] = rdf["Kelly %"].round(2).values   # fractional-Kelly % of bankroll
+    _bsig = tuple((str(r["Batter"]), str(r["Side"]), str(r["Odds"]), str(r["Line"]))
+                  for _, r in rdf.iterrows())
+    _bkey = f"bet_base_{date.isoformat()}_{STAT}"
+    _bedkey = f"bet_ed_{date.isoformat()}_{STAT}"
+    if st.session_state.get(_bkey + "_sig") != _bsig:
+        _bb = rdf[["Game", "Batter", "Side", "Line", "Odds"]].copy()
+        _bb.insert(0, "Bet", False)
+        _bb["Stake (u)"] = rdf["Kelly %"].round(2).values
+        st.session_state[_bkey] = _bb
+        st.session_state[_bkey + "_sig"] = _bsig
+        st.session_state.pop(_bedkey, None)
     bet_edited = st.data_editor(
-        bet_edit, hide_index=True, use_container_width=True,
+        st.session_state[_bkey], key=_bedkey, hide_index=True, use_container_width=True,
         disabled=["Game", "Batter", "Side", "Line", "Odds"],
         column_config={"Bet": st.column_config.CheckboxColumn("Bet", help="Tick to log this play"),
                        "Stake (u)": st.column_config.NumberColumn("Stake (u)", min_value=0.0, step=0.5)})
