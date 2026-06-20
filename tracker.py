@@ -244,6 +244,30 @@ def prediction_breakdown(log: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def calibration_by_confidence(log: pd.DataFrame) -> pd.DataFrame:
+    """Bucket graded picks by the model's confidence on its leaned side, and show
+    the actual hit rate of that side. Tells you whether a '60%' really hits ~60%."""
+    g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    if g.empty:
+        return pd.DataFrame()
+    g["p"] = pd.to_numeric(g["p_over"], errors="coerce")
+    g["oh"] = pd.to_numeric(g["over_hit"], errors="coerce")
+    g = g.dropna(subset=["p", "oh"])
+    if g.empty:
+        return pd.DataFrame()
+    g["conf"] = g["p"].apply(lambda p: max(p, 1 - p))           # confidence on leaned side
+    g["hit"] = (g["p"] >= 0.5) == (g["oh"] > 0.5)               # did the leaned side win
+    bins = [0.5, 0.55, 0.60, 0.65, 0.70, 1.01]
+    labels = ["50-55%", "55-60%", "60-65%", "65-70%", "70%+"]
+    g["bucket"] = pd.cut(g["conf"], bins=bins, labels=labels, right=False)
+    out = g.groupby("bucket", observed=True).agg(
+        n=("hit", "size"),
+        confidence=("conf", "mean"),
+        hit_rate=("hit", "mean")).reset_index()
+    out["gap"] = out["hit_rate"] - out["confidence"]
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Bet log (ROI / P&L)                                                         #
 # --------------------------------------------------------------------------- #

@@ -845,6 +845,20 @@ def _prop_view(plog, pbets, label):
                          column_config={
                              "Prediction": "Model called",
                              "Correct": st.column_config.NumberColumn("Correct", format="%d%%")})
+        cc = T.calibration_by_confidence(plog)
+        if not cc.empty:
+            with st.expander("Confidence vs actual hit rate"):
+                ccd = cc.copy()
+                ccd["confidence"] = (ccd["confidence"] * 100).round(0)
+                ccd["hit_rate"] = (ccd["hit_rate"] * 100).round(0)
+                ccd["gap"] = (ccd["gap"] * 100).round(0)
+                st.dataframe(ccd, use_container_width=True, hide_index=True,
+                             column_config={
+                                 "bucket": "Confidence",
+                                 "n": "Picks",
+                                 "confidence": st.column_config.NumberColumn("Avg conf", format="%d%%"),
+                                 "hit_rate": st.column_config.NumberColumn("Actual hit", format="%d%%"),
+                                 "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
     else:
         st.caption(f"No graded {label} projections yet.")
     _bm = T.bet_metrics(pbets)
@@ -855,15 +869,6 @@ def _prop_view(plog, pbets, label):
         b2.metric("Win rate", f"{_bm['win_rate']*100:.0f}%")
         b3.metric("Units P&L", f"{_bm['units_profit']:+.2f}", help=f"{_bm['n']} bets, {_bm['units_staked']:.1f}u staked")
         b4.metric("ROI", f"{_bm['roi']*100:+.1f}%")
-        curve = T.bankroll_curve(pbets, start_bk)
-        if not curve.empty:
-            bs = T.bankroll_stats(curve, start_bk)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Current bankroll", f"{bs['current']:.1f}", f"{bs['growth_pct']:+.1f}%")
-            c2.metric("Peak", f"{bs['peak']:.1f}")
-            c3.metric("Max drawdown", f"{bs['max_drawdown_pct']:.1f}%")
-            st.line_chart(curve.set_index("n")["bankroll"], height=240,
-                          x_label="settled bets", y_label="bankroll")
     else:
         st.caption(f"No graded {label} bets yet.")
 
@@ -873,6 +878,17 @@ for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
         _pl = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
         _pb = _bets[_bets["prop"].astype(str).str.upper() == _pp] if not _bets.empty else _bets
         _prop_view(_pl, _pb, _lbl)
+
+_allcurve = T.bankroll_curve(_bets, start_bk)
+if not _allcurve.empty:
+    st.subheader("Bankroll — combined (all props)")
+    _abs = T.bankroll_stats(_allcurve, start_bk)
+    _cc1, _cc2, _cc3 = st.columns(3)
+    _cc1.metric("Current bankroll", f"{_abs['current']:.1f}", f"{_abs['growth_pct']:+.1f}%")
+    _cc2.metric("Peak", f"{_abs['peak']:.1f}")
+    _cc3.metric("Max drawdown", f"{_abs['max_drawdown_pct']:.1f}%")
+    st.line_chart(_allcurve.set_index("n")["bankroll"], height=260,
+                  x_label="settled bets", y_label="bankroll")
 
 with st.expander("Recent graded results (verify)"):
     _isdone = lambda d: d["graded"].astype(str).isin(["1", "1.0", "True"])
