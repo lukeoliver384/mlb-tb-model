@@ -410,8 +410,9 @@ def bet_metrics(bets: pd.DataFrame) -> dict:
 
 def bankroll_curve(bets: pd.DataFrame, start: float = 100.0) -> pd.DataFrame:
     """
-    Running bankroll from graded bets, compounded in date order. Stakes are %
-    of bankroll (Kelly), so each settled bet multiplies bankroll by (1+profit/100).
+    Running bankroll from graded bets as a UNIT ledger: bankroll = start + the
+    running sum of profit (units), using the actual stake you logged per bet.
+    profit is stake*payout on a win, -stake on a loss (computed at grade time).
     Returns columns: n, date, bankroll.
     """
     g = bets[bets["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
@@ -421,7 +422,7 @@ def bankroll_curve(bets: pd.DataFrame, start: float = 100.0) -> pd.DataFrame:
     g = g.sort_values("date").reset_index(drop=True)
     rows, bk = [], float(start)
     for i, r in g.iterrows():
-        bk *= (1 + float(r["profit"]) / 100.0)
+        bk += float(r["profit"])
         rows.append({"n": i + 1, "date": r["date"], "bankroll": round(bk, 3)})
     return pd.DataFrame(rows)
 

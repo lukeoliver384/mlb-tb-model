@@ -713,8 +713,8 @@ if results:
                        file_name=f"tb_edges_{date.isoformat()}.csv")
 
     st.markdown("**Log the plays you're betting**")
-    st.caption("Stake defaults to the suggested fractional-Kelly size (% of bankroll). "
-               "Tick the plays you took, adjust stakes if needed, then tap to log them to your sheet.")
+    st.caption("Stake is in UNITS (the bankroll ledger sums them). It defaults to the Kelly suggestion "
+               "(≈ % of a 100-unit bankroll) — edit it to the actual units you bet, then tick and log.")
     _bsig = tuple((str(r["Batter"]), str(r["Side"]), str(r["Odds"]), str(r["Line"]))
                   for _, r in rdf.iterrows())
     _bkey = f"bet_base_{date.isoformat()}_{STAT}"
@@ -882,6 +882,7 @@ for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
 _allcurve = T.bankroll_curve(_bets, start_bk)
 if not _allcurve.empty:
     st.subheader("Bankroll — combined (all props)")
+    st.caption("Unit ledger: starting bankroll + net units won/lost across both props, using your logged stakes.")
     _abs = T.bankroll_stats(_allcurve, start_bk)
     _cc1, _cc2, _cc3 = st.columns(3)
     _cc1.metric("Current bankroll", f"{_abs['current']:.1f}", f"{_abs['growth_pct']:+.1f}%")
