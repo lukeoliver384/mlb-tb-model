@@ -9,6 +9,7 @@ download required.
 
 import datetime as dt
 import math
+import json
 
 import pandas as pd
 import streamlit as st
@@ -46,32 +47,54 @@ st.markdown(
 # --------------------------------------------------------------------------- #
 # Sidebar: settings                                                           #
 # --------------------------------------------------------------------------- #
+# Load saved sidebar settings (one blob) so controls persist across reloads/restarts
+_ui_saved_raw = T.get_setting("ui_settings", "") or ""
+try:
+    _ui = json.loads(_ui_saved_raw) if _ui_saved_raw else {}
+except Exception:
+    _ui = {}
+
+def _seed(k, default):
+    if k not in st.session_state:
+        st.session_state[k] = _ui.get(k, default)
+
+_seed("ui_prop", "Total Bases")
+_seed("ui_line", 1.5); _seed("ui_tossup", 0.03); _seed("ui_minedge", 0.05)
+_seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
+_seed("ui_league", float(E.LEAGUE_TB_PER_PA)); _seed("ui_regk", int(E.REG_K_PA))
+_seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
+_seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
+_seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
+_seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
+_seed("ui_statcast", True); _seed("ui_wstatcast", 0.5)
+_seed("ui_recent", True); _seed("ui_recentdays", 21); _seed("ui_wrecent", 0.35)
+
 with st.sidebar:
     st.header("Slate")
     date = st.date_input("Date", dt.date.today())
     season = st.number_input("Stats season", 2015, 2030, dt.date.today().year)
-    prop = st.radio("Prop", ["Total Bases", "Hits + Runs + RBIs"],
-                    help="HRR: Hits is a clean matchup; Runs/RBIs are scaled by the pitcher's run-suppression + run environment.")
+    prop = st.radio("Prop", ["Total Bases", "Hits + Runs + RBIs"], key="ui_prop",
+                    help="HRR: Hits is a clean matchup; Runs/RBIs scaled by run-suppression + run env.")
     STAT = "TB" if prop.startswith("Total") else "HRR"
     proj_col = "Proj TB" if STAT == "TB" else "Proj HRR"
 
     with st.expander("Lines & staking", expanded=False):
-        default_line = st.number_input("Default TB line", 0.5, 5.5, 1.5, 0.5)
-        tossup_band = st.slider("Toss-up band (± from 50%)", 0.0, 0.10, 0.03, 0.01,
-                                help="If the leaned side's cover prob is within this of 50%, it's marked 'No clear lean' rather than forcing over/under.")
-        min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
-        kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05,
-                               help="Fraction of full Kelly. 0.25 = quarter Kelly. Stakes are % of bankroll.")
-        max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, 5.0, 0.5,
-                                    help="Hard cap on any single bet, after Kelly fractioning.")
-        conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, 0.0, 0.05,
-                                help="Optional: pull model probability toward the market before sizing. 0 = off.")
+        default_line = st.number_input("Default TB line", 0.5, 5.5, step=0.5, key="ui_line")
+        tossup_band = st.slider("Toss-up band (± from 50%)", 0.0, 0.10, step=0.01, key="ui_tossup",
+                                help="Within this of 50% = 'No clear lean'.")
+        min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, step=0.01, key="ui_minedge")
+        kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, step=0.05, key="ui_kelly",
+                               help="0.25 = quarter Kelly.")
+        max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, step=0.5, key="ui_maxstake")
+        conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, step=0.05, key="ui_shrink")
         try:
             _bk0 = float(T.get_setting("start_bankroll", 1000.0) or 1000.0)
         except (ValueError, TypeError):
             _bk0 = 1000.0
-        start_bk = st.number_input("Bankroll ($)", 1.0, 1e9, _bk0, 50.0, key="start_bk",
-                                   help="Used for dollar stake sizing and the bankroll ledger. Remembered across sessions.")
+        if "start_bk" not in st.session_state:
+            st.session_state["start_bk"] = _bk0
+        start_bk = st.number_input("Bankroll ($)", 1.0, 1e9, step=50.0, key="start_bk",
+                                   help="Current balance; used for sizing + ledger. Remembered.")
         if float(start_bk) != _bk0:
             try:
                 T.set_setting("start_bankroll", float(start_bk))
@@ -79,39 +102,50 @@ with st.sidebar:
                 pass
 
     with st.expander("Model & matchup", expanded=False):
-        league_rate = st.number_input("League TB/PA", 0.30, 0.45, E.LEAGUE_TB_PER_PA, 0.001, format="%.3f")
-        reg_k = st.number_input("Regression K (PA)", 0, 600, E.REG_K_PA, 5)
-        use_splits = st.checkbox("Use L/R handedness splits", True)
-        use_homeaway = st.checkbox("Home/away splits (regressed)", True)
-        use_components = st.checkbox("Per-event log5 (advanced)", True,
-                                     help="Project 1B/2B/3B/HR separately via log5.")
-        method = st.radio("Cover-probability method", ["Exact distribution (recommended)", "Poisson (sheet original)"])
-        use_calibration = st.checkbox("Apply calibration correction", False,
+        league_rate = st.number_input("League TB/PA", 0.30, 0.45, step=0.001, format="%.3f", key="ui_league")
+        reg_k = st.number_input("Regression K (PA)", 0, 600, step=5, key="ui_regk")
+        use_splits = st.checkbox("Use L/R handedness splits", key="ui_splits")
+        use_homeaway = st.checkbox("Home/away splits (regressed)", key="ui_homeaway")
+        use_components = st.checkbox("Per-event log5 (advanced)", key="ui_components")
+        method = st.radio("Cover-probability method",
+                          ["Exact distribution (recommended)", "Poisson (sheet original)"], key="ui_method")
+        use_calibration = st.checkbox("Apply calibration correction", key="ui_calib",
                                       help="Re-scales probabilities from graded results. No-op until enough data.")
 
     with st.expander("Park & weather", expanded=False):
-        use_park = st.checkbox("Apply park factors", True)
-        park_strength = st.slider("Park factor strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_park)
-        use_weather = st.checkbox("Apply weather (Open-Meteo)", False,
+        use_park = st.checkbox("Apply park factors", key="ui_park")
+        park_strength = st.slider("Park factor strength", 0.0, 1.5, step=0.05, key="ui_parkstr", disabled=not use_park)
+        use_weather = st.checkbox("Apply weather (Open-Meteo)", key="ui_weather",
                                   help="Per-game temp + wind out/in on HR/XBH. Domes auto-neutral.")
-        weather_strength = st.slider("Weather strength", 0.0, 1.5, 1.0, 0.05, disabled=not use_weather)
+        weather_strength = st.slider("Weather strength", 0.0, 1.5, step=0.05, key="ui_weatherstr", disabled=not use_weather)
 
     with st.expander("Bullpen split", expanded=False):
-        auto_bullpen = st.checkbox("Auto starter/bullpen split", True,
-                                   help="Share of PAs vs starter from his batters-faced/start.")
-        sp_share_manual = st.slider("Manual share of PAs vs starter", 0.40, 1.00, 1.00, 0.05, disabled=auto_bullpen)
-        bullpen_rate = st.number_input("Bullpen TB/BF (later PAs)", 0.28, 0.42, 0.345, 0.005, format="%.3f")
+        auto_bullpen = st.checkbox("Auto starter/bullpen split", key="ui_autobp")
+        sp_share_manual = st.slider("Manual share of PAs vs starter", 0.40, 1.00, step=0.05, key="ui_spshare", disabled=auto_bullpen)
+        bullpen_rate = st.number_input("Bullpen TB/BF (later PAs)", 0.28, 0.42, step=0.005, format="%.3f", key="ui_bprate")
 
     with st.expander("Statcast & recent form", expanded=False):
-        use_statcast = st.checkbox("Blend Statcast expected (xSLG)", True)
-        w_statcast = st.slider("Weight on expected vs actual", 0.0, 1.0, 0.5, 0.05, disabled=not use_statcast)
-        use_recent = st.checkbox("Blend recent form", True)
-        recent_days = st.slider("Window (days)", 7, 45, 21, disabled=not use_recent)
-        w_recent = st.slider("Weight on recent vs season", 0.0, 1.0, 0.35, 0.05, disabled=not use_recent)
+        use_statcast = st.checkbox("Blend Statcast expected (xSLG)", key="ui_statcast")
+        w_statcast = st.slider("Weight on expected vs actual", 0.0, 1.0, step=0.05, key="ui_wstatcast", disabled=not use_statcast)
+        use_recent = st.checkbox("Blend recent form", key="ui_recent")
+        recent_days = st.slider("Window (days)", 7, 45, step=1, key="ui_recentdays", disabled=not use_recent)
+        w_recent = st.slider("Weight on recent vs season", 0.0, 1.0, step=0.05, key="ui_wrecent", disabled=not use_recent)
 
     with st.expander("Fangraphs CSV (optional)", expanded=False):
         st.caption("Overrides MLB-API batter TB/PA")
         fg_csv = st.file_uploader("Fangraphs batting export (.csv)", type=["csv"])
+
+# Persist sidebar settings (one write only when something changed)
+_uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
+           "ui_league", "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib",
+           "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
+           "ui_statcast", "ui_wstatcast", "ui_recent", "ui_recentdays", "ui_wrecent"]
+_newui = json.dumps({k: st.session_state.get(k) for k in _uikeys}, default=str, sort_keys=True)
+if _newui != _ui_saved_raw:
+    try:
+        T.set_setting("ui_settings", _newui)
+    except Exception:
+        pass
 
 fg_rates = D.load_fangraphs_csv(fg_csv) if fg_csv else {}
 
@@ -133,6 +167,20 @@ def load(date_str: str, season: int, want_recent: bool, recent_days: int, want_w
 def load_savant(season: int):
     return D.load_savant_expected(season, "batter"), D.load_savant_expected(season, "pitcher")
 
+def _bets_cached():
+    if "bets_cache" not in st.session_state:
+        st.session_state["bets_cache"] = T.read_bets()
+    return st.session_state["bets_cache"]
+
+def _log_cached():
+    if "log_cache" not in st.session_state:
+        st.session_state["log_cache"] = T.read_log()
+    return st.session_state["log_cache"]
+
+def _invalidate_tracker_cache():
+    st.session_state.pop("bets_cache", None)
+    st.session_state.pop("log_cache", None)
+
 colA, colB = st.columns([1, 5])
 with colA:
     go = st.button("Load slate", type="primary")
@@ -152,7 +200,7 @@ if not slate:
     st.stop()
 
 try:
-    T_cal, T_caln = T.calibration_temperature(T.read_log()) if use_calibration else (1.0, 0)
+    T_cal, T_caln = T.calibration_temperature(_log_cached()) if use_calibration else (1.0, 0)
 except Exception:
     T_cal, T_caln = 1.0, 0
 
@@ -167,8 +215,8 @@ if use_calibration:
                f"({'compressing — model was overconfident' if T_cal > 1 else ('expanding — underconfident' if T_cal < 1 else 'no change yet')}).")
 
 # Dynamic bankroll: realized P&L so far updates the current bankroll used for sizing.
-_bets = T.read_bets()
-_log = T.read_log()
+_bets = _bets_cached()
+_log = _log_cached()
 _realized = 0.0
 try:
     _gg = _bets[_bets["graded"].astype(str).isin(["1", "1.0", "True"])]
@@ -700,13 +748,10 @@ if results:
     only_plays = fcol1.checkbox("Only +EV sides", True)
     plus_only = fcol2.checkbox("Plus-money only (+odds)", False,
                                help="Show only underdog prices — where a modest hit rate still profits.")
-    min_ev = st.slider("Minimum EV to show (% ROI)", 0.0, 20.0, 0.0, 0.5,
-                       help="Only show plays whose expected ROI clears this. Higher = fewer, higher-ROI bets.")
     if only_plays:
         rdf = rdf[rdf["Model EV"] >= 0]
     if plus_only:
         rdf = rdf[rdf["Odds"] > 0]
-    rdf = rdf[rdf["Model EV"] * 100 >= min_ev]
     rdf = rdf.sort_values("Model EV", ascending=False)
     _cmap = {(r["Game"], r["Batter"]): r.get("Conf", 3) for _, r in df.iterrows()}
     rdf["Conf"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
@@ -781,6 +826,7 @@ if results:
         if brows:
             try:
                 nb = T.log_bets(pd.DataFrame(brows))
+                _invalidate_tracker_cache()
                 st.success(f"Logged {nb} bet(s) to the sheet.")
             except Exception as ex:
                 st.error(f"Bet log failed: {ex}")
@@ -825,6 +871,7 @@ with tc1:
     if st.button("Log today's projections"):
         try:
             n = T.log_projections(df, date.isoformat(), prop=STAT, proj_col=proj_col)
+            _invalidate_tracker_cache()
             st.success(f"Logged {n} projections for {date.isoformat()}.")
         except Exception as ex:
             st.error(f"Log failed: {ex}")
@@ -833,6 +880,7 @@ with tc2:
         try:
             n = T.grade(int(season))
             nb = T.grade_bets(int(season))
+            _invalidate_tracker_cache()
             st.success(f"Graded {n} projections and {nb} bets.")
         except Exception as ex:
             st.error(f"Grade failed: {ex}")
@@ -841,6 +889,7 @@ with tc2:
             T.reset_grades()
             n = T.grade(int(season))
             nb = T.grade_bets(int(season))
+            _invalidate_tracker_cache()
             st.success(f"Reset + re-graded {n} projections and {nb} bets.")
         except Exception as ex:
             st.error(f"Re-grade failed: {ex}")
