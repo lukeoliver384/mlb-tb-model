@@ -57,8 +57,8 @@ with st.sidebar:
 
     with st.expander("Lines & staking", expanded=False):
         default_line = st.number_input("Default TB line", 0.5, 5.5, 1.5, 0.5)
-        under_thresh = st.number_input("Under-lean threshold (Proj TB)", 0.5, 3.0, 1.35, 0.05,
-                                       help="TB: any projection below this is treated as an Under lean.")
+        tossup_band = st.slider("Toss-up band (± from 50%)", 0.0, 0.10, 0.03, 0.01,
+                                help="If the leaned side's cover prob is within this of 50%, it's marked 'No clear lean' rather than forcing over/under.")
         min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, 0.05, 0.01)
         kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, 0.25, 0.05,
                                help="Fraction of full Kelly. 0.25 = quarter Kelly. Stakes are % of bankroll.")
@@ -165,6 +165,19 @@ def _calibrate(p):
 if use_calibration:
     st.caption(f"Calibration on: temperature {T_cal} from {T_caln} graded legs "
                f"({'compressing — model was overconfident' if T_cal > 1 else ('expanding — underconfident' if T_cal < 1 else 'no change yet')}).")
+
+# Dynamic bankroll: realized P&L so far updates the current bankroll used for sizing.
+_bets = T.read_bets()
+_log = T.read_log()
+_realized = 0.0
+try:
+    _gg = _bets[_bets["graded"].astype(str).isin(["1", "1.0", "True"])]
+    _realized = float(pd.to_numeric(_gg["profit"], errors="coerce").fillna(0).sum())
+except Exception:
+    _realized = 0.0
+current_bk = float(start_bk) + _realized
+st.caption(f"Bankroll for sizing: **${current_bk:,.2f}**  "
+           f"(starting ${float(start_bk):,.0f}{'  +' if _realized >= 0 else '  −'} ${abs(_realized):,.2f} realized).")
 
 
 # --------------------------------------------------------------------------- #
@@ -343,9 +356,10 @@ if go or st.session_state.get("proj_df") is None or _proj_stale:
 df = st.session_state["proj_df"]
 
 def _lean(row):
-    if STAT == "TB" and float(row[proj_col]) < under_thresh:
-        return "Under"
-    return "Over" if float(row["P(Over)"]) >= 0.5 else "Under"
+    p = float(row["P(Over)"])
+    if abs(p - 0.5) < tossup_band:
+        return "No lean"
+    return "Over" if p > 0.5 else "Under"
 df["Lean"] = df.apply(_lean, axis=1)
 
 bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"], r.get("Venue", ""))
@@ -416,7 +430,7 @@ def _summary(row):
     return (f"**{row['Batter']} {sidelbl} {row['Line']}** — model {lp*100:.0f}%. "
             + "; ".join(bits) + f". Based on {samp}.")
 
-_strong = df.copy()
+_strong = df[df["Lean"].isin(["Over", "Under"])].copy()
 _strong["_p_side"] = _strong.apply(
     lambda r: float(r["P(Over)"]) if r["Lean"] == "Over" else 1 - float(r["P(Over)"]), axis=1)
 _strong["_lean"] = _strong["_p_side"]
@@ -677,28 +691,38 @@ for _, row in edited.iterrows():
             "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
             "Fair P": round(fair, 3) if fair is not None else None,
             "Edge": round(edge, 3), "Model EV": round(ev, 3),
-            "Stake $": round(kel * start_bk, 2),
+            "Stake $": round(kel * current_bk, 2),
             "Verdict": "VALUE" if edge >= min_edge else ("Lean" if edge >= 0 else "Pass"),
         })
 
 if results:
     rdf = pd.DataFrame(results)
-    only_plays = st.checkbox("Show only +EV sides (hide Pass)", True)
+    fcol1, fcol2 = st.columns(2)
+    only_plays = fcol1.checkbox("Only +EV sides", True)
+    plus_only = fcol2.checkbox("Plus-money only (+odds)", False,
+                               help="Show only underdog prices — where a modest hit rate still profits.")
+    min_ev = st.slider("Minimum EV to show (% ROI)", 0.0, 20.0, 0.0, 0.5,
+                       help="Only show plays whose expected ROI clears this. Higher = fewer, higher-ROI bets.")
     if only_plays:
-        rdf = rdf[rdf["Edge"] >= 0]
-    rdf = rdf.sort_values("Edge", ascending=False)
+        rdf = rdf[rdf["Model EV"] >= 0]
+    if plus_only:
+        rdf = rdf[rdf["Odds"] > 0]
+    rdf = rdf[rdf["Model EV"] * 100 >= min_ev]
+    rdf = rdf.sort_values("Model EV", ascending=False)
     _cmap = {(r["Game"], r["Batter"]): r.get("Conf", 3) for _, r in df.iterrows()}
     rdf["Conf"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
 
-    _val = rdf[rdf["Edge"] > 0].head(5)
+    _val = rdf[rdf["Model EV"] > 0].sort_values("Model EV", ascending=False).head(5)
     if not _val.empty:
         st.subheader("Top 5 value plays")
-        st.caption("Highest edge vs the market you entered, with data-confidence stars.")
-        _vshow = _val[["Batter", "Side", "Line", "Odds", "Edge", "Stake $", "Conf"]].copy()
+        st.caption("Ranked by expected ROI at your price (not hit rate) — plus-money value floats up.")
+        _vshow = _val[["Batter", "Side", "Line", "Odds", "Model EV", "Edge", "Stake $", "Conf"]].copy()
         _vshow["Edge"] = _vshow["Edge"] * 100      # fraction -> percentage points
+        _vshow["Model EV"] = _vshow["Model EV"] * 100
         st.dataframe(_vshow, use_container_width=True, hide_index=True,
                      column_config={
                          "Odds": st.column_config.NumberColumn("Odds", format="%+d"),
+                         "Model EV": st.column_config.NumberColumn("EV (ROI)", format="%+.1f%%"),
                          "Edge": st.column_config.NumberColumn("Edge", format="%+.1f%%"),
                          "Stake $": st.column_config.NumberColumn("Stake", format="$%.2f"),
                      })
@@ -822,8 +846,6 @@ with tc2:
         except Exception as ex:
             st.error(f"Re-grade failed: {ex}")
 
-_log = T.read_log()
-_bets = T.read_bets()
 
 def _prop_view(plog, pbets, label):
     _m = T.metrics(plog)
