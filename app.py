@@ -175,9 +175,8 @@ try:
     _realized = float(pd.to_numeric(_gg["profit"], errors="coerce").fillna(0).sum())
 except Exception:
     _realized = 0.0
-current_bk = float(start_bk) + _realized
-st.caption(f"Bankroll for sizing: **${current_bk:,.2f}**  "
-           f"(starting ${float(start_bk):,.0f}{'  +' if _realized >= 0 else '  −'} ${abs(_realized):,.2f} realized).")
+current_bk = float(start_bk)
+st.caption(f"Bankroll for sizing: **${current_bk:,.2f}** (current balance, as entered — keep it updated).")
 
 
 # --------------------------------------------------------------------------- #
@@ -899,11 +898,12 @@ for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
         _pb = _bets[_bets["prop"].astype(str).str.upper() == _pp] if not _bets.empty else _bets
         _prop_view(_pl, _pb, _lbl)
 
-_allcurve = T.bankroll_curve(_bets, start_bk)
+_baseline = float(start_bk) - _realized
+_allcurve = T.bankroll_curve(_bets, _baseline)
 if not _allcurve.empty:
     st.subheader("Bankroll — combined (all props)")
-    st.caption("Dollar ledger: starting bankroll + net $ won/lost across both props, using your logged stakes.")
-    _abs = T.bankroll_stats(_allcurve, start_bk)
+    st.caption("Dollar ledger ending at your current balance — how you got here from logged bets across both props.")
+    _abs = T.bankroll_stats(_allcurve, _baseline)
     _cc1, _cc2, _cc3 = st.columns(3)
     _cc1.metric("Current bankroll", f"${_abs['current']:,.2f}", f"{_abs['growth_pct']:+.1f}%")
     _cc2.metric("Peak", f"${_abs['peak']:,.2f}")
