@@ -66,6 +66,17 @@ with st.sidebar:
                                     help="Hard cap on any single bet, after Kelly fractioning.")
         conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, 0.0, 0.05,
                                 help="Optional: pull model probability toward the market before sizing. 0 = off.")
+        try:
+            _bk0 = float(T.get_setting("start_bankroll", 1000.0) or 1000.0)
+        except (ValueError, TypeError):
+            _bk0 = 1000.0
+        start_bk = st.number_input("Bankroll ($)", 1.0, 1e9, _bk0, 50.0, key="start_bk",
+                                   help="Used for dollar stake sizing and the bankroll ledger. Remembered across sessions.")
+        if float(start_bk) != _bk0:
+            try:
+                T.set_setting("start_bankroll", float(start_bk))
+            except Exception:
+                pass
 
     with st.expander("Model & matchup", expanded=False):
         league_rate = st.number_input("League TB/PA", 0.30, 0.45, E.LEAGUE_TB_PER_PA, 0.001, format="%.3f")
@@ -666,7 +677,7 @@ for _, row in edited.iterrows():
             "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
             "Fair P": round(fair, 3) if fair is not None else None,
             "Edge": round(edge, 3), "Model EV": round(ev, 3),
-            "Kelly %": round(kel * 100, 2),
+            "Stake $": round(kel * start_bk, 2),
             "Verdict": "VALUE" if edge >= min_edge else ("Lean" if edge >= 0 else "Pass"),
         })
 
@@ -683,13 +694,13 @@ if results:
     if not _val.empty:
         st.subheader("Top 5 value plays")
         st.caption("Highest edge vs the market you entered, with data-confidence stars.")
-        _vshow = _val[["Batter", "Side", "Line", "Odds", "Edge", "Kelly %", "Conf"]].copy()
+        _vshow = _val[["Batter", "Side", "Line", "Odds", "Edge", "Stake $", "Conf"]].copy()
         _vshow["Edge"] = _vshow["Edge"] * 100      # fraction -> percentage points
         st.dataframe(_vshow, use_container_width=True, hide_index=True,
                      column_config={
                          "Odds": st.column_config.NumberColumn("Odds", format="%+d"),
                          "Edge": st.column_config.NumberColumn("Edge", format="%+.1f%%"),
-                         "Kelly %": st.column_config.NumberColumn("Stake %", format="%.2f%%"),
+                         "Stake $": st.column_config.NumberColumn("Stake", format="$%.2f"),
                      })
 
     st.subheader("Ranked edges")
@@ -703,7 +714,7 @@ if results:
     try:
         sty = rdf.style.format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
                                 "Model EV": _spct, "Odds": lambda x: f"{x:+.0f}",
-                                "Kelly %": lambda x: f"{x:.2f}%"})
+                                "Stake $": lambda x: f"${x:,.2f}"})
         sty = sty.map(_verdict_style, subset=["Verdict"]) if hasattr(sty, "map") \
             else sty.applymap(_verdict_style, subset=["Verdict"])
         st.dataframe(sty, use_container_width=True, hide_index=True)
@@ -713,8 +724,8 @@ if results:
                        file_name=f"tb_edges_{date.isoformat()}.csv")
 
     st.markdown("**Log the plays you're betting**")
-    st.caption("Stake is in UNITS (the bankroll ledger sums them). It defaults to the Kelly suggestion "
-               "(≈ % of a 100-unit bankroll) — edit it to the actual units you bet, then tick and log.")
+    st.caption("Stake is in DOLLARS (defaults to Kelly fraction × your bankroll). "
+               "Edit it to what you actually bet, then tick and log — the bankroll ledger sums these.")
     _bsig = tuple((str(r["Batter"]), str(r["Side"]), str(r["Odds"]), str(r["Line"]))
                   for _, r in rdf.iterrows())
     _bkey = f"bet_base_{date.isoformat()}_{STAT}"
@@ -722,7 +733,7 @@ if results:
     if st.session_state.get(_bkey + "_sig") != _bsig:
         _bb = rdf[["Game", "Batter", "Side", "Line", "Odds"]].copy()
         _bb.insert(0, "Bet", False)
-        _bb["Stake (u)"] = rdf["Kelly %"].round(2).values
+        _bb["Stake $"] = rdf["Stake $"].round(2).values
         st.session_state[_bkey] = _bb
         st.session_state[_bkey + "_sig"] = _bsig
         st.session_state.pop(_bedkey, None)
@@ -730,14 +741,14 @@ if results:
         st.session_state[_bkey], key=_bedkey, hide_index=True, use_container_width=True,
         disabled=["Game", "Batter", "Side", "Line", "Odds"],
         column_config={"Bet": st.column_config.CheckboxColumn("Bet", help="Tick to log this play"),
-                       "Stake (u)": st.column_config.NumberColumn("Stake (u)", min_value=0.0, step=0.5)})
+                       "Stake $": st.column_config.NumberColumn("Stake ($)", min_value=0.0, step=1.0, format="$%.2f")})
     if st.button("✓ Log selected bets", type="primary"):
         brows = []
         for _, r in bet_edited.iterrows():
             if not bool(r["Bet"]):
                 continue
             try:
-                stake = float(r["Stake (u)"])
+                stake = float(r["Stake $"])
             except (ValueError, TypeError):
                 stake = 1.0
             bid, pitch, ven = bid_map.get((r["Game"], r["Batter"]), (0, "", ""))
@@ -813,19 +824,6 @@ with tc2:
 
 _log = T.read_log()
 _bets = T.read_bets()
-_bk_default = 100.0
-try:
-    _bk_default = float(T.get_setting("start_bankroll", 100.0) or 100.0)
-except (ValueError, TypeError):
-    _bk_default = 100.0
-start_bk = st.number_input("Starting bankroll (units)", 1.0, 1_000_000.0, _bk_default, 10.0,
-                           key="start_bk",
-                           help="Remembered across sessions. Each prop's bankroll curve compounds its own bets from here.")
-if float(start_bk) != _bk_default:
-    try:
-        T.set_setting("start_bankroll", float(start_bk))
-    except Exception:
-        pass
 
 def _prop_view(plog, pbets, label):
     _m = T.metrics(plog)
@@ -867,7 +865,7 @@ def _prop_view(plog, pbets, label):
         b1, b2, b3, b4 = st.columns(4)
         b1.metric("Record", _bm["record"])
         b2.metric("Win rate", f"{_bm['win_rate']*100:.0f}%")
-        b3.metric("Units P&L", f"{_bm['units_profit']:+.2f}", help=f"{_bm['n']} bets, {_bm['units_staked']:.1f}u staked")
+        b3.metric("$ P&L", f"${_bm['units_profit']:+,.2f}", help=f"{_bm['n']} bets, ${_bm['units_staked']:,.0f} staked")
         b4.metric("ROI", f"{_bm['roi']*100:+.1f}%")
     else:
         st.caption(f"No graded {label} bets yet.")
@@ -882,14 +880,14 @@ for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
 _allcurve = T.bankroll_curve(_bets, start_bk)
 if not _allcurve.empty:
     st.subheader("Bankroll — combined (all props)")
-    st.caption("Unit ledger: starting bankroll + net units won/lost across both props, using your logged stakes.")
+    st.caption("Dollar ledger: starting bankroll + net $ won/lost across both props, using your logged stakes.")
     _abs = T.bankroll_stats(_allcurve, start_bk)
     _cc1, _cc2, _cc3 = st.columns(3)
-    _cc1.metric("Current bankroll", f"{_abs['current']:.1f}", f"{_abs['growth_pct']:+.1f}%")
-    _cc2.metric("Peak", f"{_abs['peak']:.1f}")
+    _cc1.metric("Current bankroll", f"${_abs['current']:,.2f}", f"{_abs['growth_pct']:+.1f}%")
+    _cc2.metric("Peak", f"${_abs['peak']:,.2f}")
     _cc3.metric("Max drawdown", f"{_abs['max_drawdown_pct']:.1f}%")
     st.line_chart(_allcurve.set_index("n")["bankroll"], height=260,
-                  x_label="settled bets", y_label="bankroll")
+                  x_label="settled bets", y_label="bankroll ($)")
 
 with st.expander("Recent graded results (verify)"):
     _isdone = lambda d: d["graded"].astype(str).isin(["1", "1.0", "True"])
