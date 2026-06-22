@@ -66,7 +66,7 @@ _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", Tru
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
 _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
 _seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
-_seed("ui_statcast", True); _seed("ui_wstatcast", 0.5)
+_seed("ui_statcast", True); _seed("ui_wstatcast", 0.5); _seed("ui_arsenal", False)
 _seed("ui_recent", True); _seed("ui_recentdays", 21); _seed("ui_wrecent", 0.35)
 
 with st.sidebar:
@@ -127,6 +127,8 @@ with st.sidebar:
     with st.expander("Statcast & recent form", expanded=False):
         use_statcast = st.checkbox("Blend Statcast expected (xSLG)", key="ui_statcast")
         w_statcast = st.slider("Weight on expected vs actual", 0.0, 1.0, step=0.05, key="ui_wstatcast", disabled=not use_statcast)
+        use_arsenal = st.checkbox("Pitch-type matchup (arsenal)", key="ui_arsenal",
+                                  help="Weights the hitter's xwOBA by pitch type vs the starter's pitch mix. Sharpens borderline calls.")
         use_recent = st.checkbox("Blend recent form", key="ui_recent")
         recent_days = st.slider("Window (days)", 7, 45, step=1, key="ui_recentdays", disabled=not use_recent)
         w_recent = st.slider("Weight on recent vs season", 0.0, 1.0, step=0.05, key="ui_wrecent", disabled=not use_recent)
@@ -139,7 +141,7 @@ with st.sidebar:
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
            "ui_league", "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
-           "ui_statcast", "ui_wstatcast", "ui_recent", "ui_recentdays", "ui_wrecent"]
+           "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent"]
 _newui = json.dumps({k: st.session_state.get(k) for k in _uikeys}, default=str, sort_keys=True)
 if _newui != _ui_saved_raw:
     try:
@@ -167,6 +169,10 @@ def load(date_str: str, season: int, want_recent: bool, recent_days: int, want_w
 def load_savant(season: int):
     return D.load_savant_expected(season, "batter"), D.load_savant_expected(season, "pitcher")
 
+@st.cache_data(ttl=3600, show_spinner="Pulling pitch-arsenal data…")
+def load_arsenal(season: int):
+    return D.load_savant_arsenal(season, "batter"), D.load_savant_arsenal(season, "pitcher")
+
 def _bets_cached():
     if "bets_cache" not in st.session_state:
         st.session_state["bets_cache"] = T.read_bets()
@@ -189,11 +195,13 @@ if go:
     try:
         st.session_state["slate"] = load(date.isoformat(), int(season), use_recent, int(recent_days), use_weather)
         st.session_state["savant"] = load_savant(int(season)) if use_statcast else ({}, {})
+        st.session_state["arsenal"] = load_arsenal(int(season)) if use_arsenal else ({}, {})
     except Exception as ex:
         st.error(f"Could not load slate: {ex}")
 
 slate = st.session_state.get("slate")
 savant_bat, savant_pit = st.session_state.get("savant", ({}, {}))
+arse_bat, arse_pit = st.session_state.get("arsenal", ({}, {}))
 if not slate:
     st.info("Pick a date and click **Load slate**. Lineups appear ~3–4 hours before first pitch; "
             "until then you'll see probable pitchers but empty lineups.")
@@ -265,6 +273,9 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
             if not h_pa:
                 continue
             ha = b.home_away_factor(batter_is_home) if use_homeaway else 1.0
+            if use_arsenal and b.mlbam_id in arse_bat and opp_pitcher.mlbam_id in arse_pit:
+                ha *= E.arsenal_factor(arse_bat[b.mlbam_id], arse_pit[opp_pitcher.mlbam_id],
+                                       savant_bat.get(b.mlbam_id, {}).get("xwoba", 0.320))
             park_runs = pmult * (wmult.get("HR", 1.0) if wmult else 1.0)
             lam, p_cover = E.project_hrr(
                 h_pa * ha, b.pa, p_h_bf, max(opp_pitcher.bf, 1),
@@ -311,6 +322,9 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
         if use_homeaway:
             b_rate *= b.home_away_factor(batter_is_home)
             p_rate *= opp_pitcher.home_away_factor(pitcher_is_home)
+        if use_arsenal and b.mlbam_id in arse_bat and opp_pitcher.mlbam_id in arse_pit:
+            b_rate *= E.arsenal_factor(arse_bat[b.mlbam_id], arse_pit[opp_pitcher.mlbam_id],
+                                       savant_bat.get(b.mlbam_id, {}).get("xwoba", 0.320))
         if not b_rate or not p_rate:
             continue
         shares = b.hit_shares()

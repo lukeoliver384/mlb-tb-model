@@ -523,6 +523,47 @@ def load_savant_expected(season: int, kind: str = "batter") -> dict:
     return out
 
 
+def load_savant_arsenal(season: int, kind: str = "batter") -> dict:
+    """
+    Pull Savant pitch-arsenal-stats. Returns {player_id: {pitch_type: value}}:
+      * batter  -> value = est_woba (xwOBA) vs that pitch type
+      * pitcher -> value = pitch_usage as a fraction (how often thrown)
+    """
+    url = ("https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats"
+           f"?type={kind}&year={season}&min=50&csv=true")
+    out = {}
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        import io, csv
+        reader = csv.DictReader(io.StringIO(r.text))
+        for row in reader:
+            try:
+                pid = int(row.get("player_id") or row.get("﻿player_id"))
+                pt = (row.get("pitch_type") or "").strip()
+            except (TypeError, ValueError):
+                continue
+            if not pt:
+                continue
+            if kind == "batter":
+                try:
+                    v = float(row.get("est_woba") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if v > 0:
+                    out.setdefault(pid, {})[pt] = v
+            else:
+                try:
+                    v = float(row.get("pitch_usage") or 0) / 100.0
+                except (TypeError, ValueError):
+                    continue
+                if v > 0:
+                    out.setdefault(pid, {})[pt] = v
+    except Exception:
+        pass
+    return out
+
+
 def league_reliever_tb_per_bf_default() -> float:
     """Bullpen TB/BF default (relievers run a touch better than overall league)."""
     return 0.345

@@ -58,6 +58,29 @@ def prob_to_american(p: float) -> float:
     return -p / (1 - p) * 100 if p >= 0.5 else (1 - p) / p * 100
 
 
+def arsenal_factor(batter_xwoba_by_pitch: dict, pitcher_usage_by_pitch: dict,
+                   batter_overall_xwoba: float) -> float:
+    """
+    Pitch-type matchup multiplier. Weights the hitter's xwOBA vs each pitch type by
+    how often the starter throws it, compares to the hitter's overall xwOBA, and
+    returns a small (regressed, clamped) rate multiplier. >1 = the pitcher throws
+    stuff this hitter handles well; <1 = a bad matchup of pitch types.
+    """
+    if not batter_xwoba_by_pitch or not pitcher_usage_by_pitch or batter_overall_xwoba <= 0:
+        return 1.0
+    num = w = 0.0
+    for pt, usage in pitcher_usage_by_pitch.items():
+        xw = batter_xwoba_by_pitch.get(pt)
+        if xw and usage:
+            num += usage * xw
+            w += usage
+    if w <= 0:
+        return 1.0
+    weighted = num / w
+    raw = weighted / batter_overall_xwoba
+    return max(0.85, min(1.15, 1 + (raw - 1) * 0.5))   # half-weight, ±15% cap
+
+
 def confidence_score(batter_pa: float, pitcher_bf: float, split_pa: float,
                      use_splits: bool) -> int:
     """
