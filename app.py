@@ -171,7 +171,13 @@ def load_savant(season: int):
 
 @st.cache_data(ttl=3600, show_spinner="Pulling pitch-arsenal data…")
 def load_arsenal(season: int):
-    return D.load_savant_arsenal(season, "batter"), D.load_savant_arsenal(season, "pitcher")
+    fn = getattr(D, "load_savant_arsenal", None)
+    if fn is None:
+        return {}, {}
+    try:
+        return fn(season, "batter"), fn(season, "pitcher")
+    except Exception:
+        return {}, {}
 
 def _bets_cached():
     if "bets_cache" not in st.session_state:
