@@ -129,8 +129,7 @@ def log_projections(proj_df: pd.DataFrame, date_str: str,
         "line": proj_df["Line"],
         "prop": prop,
         "proj": proj_df[proj_col],
-        "pred_side": ["Over" if float(p) > float(l) else "Under"
-                      for p, l in zip(proj_df[proj_col], proj_df["Line"])],
+        "pred_side": ["Over" if float(po) > 0.5 else "Under" for po in proj_df["P(Over)"]],
         "p_over": proj_df["P(Over)"],
         "actual": None, "actual_side": None, "over_hit": None, "correct": None, "graded": 0,
     })
@@ -178,7 +177,7 @@ def grade(season: int) -> int:
         pred = str(row.get("pred_side") or "")
         if pred not in ("Over", "Under"):
             try:
-                pred = "Over" if float(row.get("proj")) > ln else "Under"
+                pred = "Over" if float(row.get("p_over")) > 0.5 else "Under"
             except (ValueError, TypeError):
                 pred = ""
         log.at[i, "actual"] = actual
