@@ -61,7 +61,7 @@ def _seed(k, default):
 _seed("ui_prop", "Total Bases")
 _seed("ui_line", 1.5); _seed("ui_tossup", 0.03); _seed("ui_minedge", 0.05)
 _seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
-_seed("ui_league", float(E.LEAGUE_TB_PER_PA)); _seed("ui_regk", int(E.REG_K_PA))
+_seed("ui_regk", int(E.REG_K_PA))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
 _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
@@ -102,7 +102,6 @@ with st.sidebar:
                 pass
 
     with st.expander("Model & matchup", expanded=False):
-        league_rate = st.number_input("League TB/PA", 0.30, 0.45, step=0.001, format="%.3f", key="ui_league")
         reg_k = st.number_input("Regression K (PA)", 0, 600, step=5, key="ui_regk")
         use_splits = st.checkbox("Use L/R handedness splits", key="ui_splits")
         use_homeaway = st.checkbox("Home/away splits (regressed)", key="ui_homeaway")
@@ -139,7 +138,7 @@ with st.sidebar:
 
 # Persist sidebar settings (one write only when something changed)
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
-           "ui_league", "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib",
+           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent"]
 _newui = json.dumps({k: st.session_state.get(k) for k in _uikeys}, default=str, sort_keys=True)
@@ -226,6 +225,7 @@ if _lr:
     E.LEAGUE_R_PER_BF = _lr["R"]
     st.caption(f"League baseline (current season): {_lr['TB']:.3f} TB/PA, {_lr['H']:.3f} H/PA "
                "— model auto-adjusts to the run environment.")
+league_rate = E.LEAGUE_TB_PER_PA
 if not slate:
     st.info("Pick a date and click **Load slate**. Lineups appear ~3–4 hours before first pitch; "
             "until then you'll see probable pitchers but empty lineups.")
