@@ -15,7 +15,7 @@ Core idea (unchanged from the spreadsheet):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import exp, factorial
+from math import exp, factorial, lgamma
 from typing import Iterable
 
 LEAGUE_TB_PER_PA = 0.355   # sheet E13
@@ -26,6 +26,7 @@ LEAGUE_EVENT_RATES = {"1B": 0.137, "2B": 0.044, "3B": 0.004, "HR": 0.030}
 # Approximate league per-PA rates for Hits / Runs / RBIs, and runs allowed per BF.
 LEAGUE_HRR = {"H": 0.235, "R": 0.115, "RBI": 0.110}
 LEAGUE_R_PER_BF = 0.118
+HRR_DISPERSION = 1.5   # >1 = overdispersed (more 0-1 games than Poisson); tune via calibration
 REG_K_PA = 175             # sheet E12 (regression constant, in PA)
 
 
@@ -305,6 +306,24 @@ def p_cover_from_dist(dist: list[float], line: float, side: str) -> float:
     return p_over if side.lower() == "over" else 1 - p_over
 
 
+def p_cover_negbin(lam: float, line: float, side: str, dispersion: float = 1.5) -> float:
+    """Cover prob for a count with overdispersion (var = dispersion*mean). Negative
+    binomial; falls back to Poisson if dispersion<=1. Used for H+R+RBI, where H/R/RBI
+    correlate and real games lump at 0-1 more than Poisson allows."""
+    if dispersion <= 1.0 or lam <= 0:
+        return p_cover_poisson(lam, line, side)
+    mu = lam
+    r = mu / (dispersion - 1.0)            # size param so var = dispersion*mu
+    p = r / (r + mu)
+    k_max = int(line)
+    cdf = 0.0
+    for k in range(k_max + 1):
+        pmf = exp(lgamma(k + r) - lgamma(r) - lgamma(k + 1)) * (p ** r) * ((1 - p) ** k)
+        cdf += pmf
+    cdf = min(max(cdf, 0.0), 1.0)
+    return (1 - cdf) if side.lower() == "over" else cdf
+
+
 def p_cover_poisson(lam: float, line: float, side: str) -> float:
     """The sheet's original Poisson method (J14), kept for comparison."""
     k = int(line)
@@ -344,7 +363,7 @@ def project_hrr(h_pa, h_pa_n, p_h_per_bf, p_bf, r_pa, rbi_pa, p_r_per_bf,
 
     hrr_pa = hits_adj + runs_adj + rbi_adj
     lam = hrr_pa * expected_pa
-    return lam, p_cover_poisson(lam, line, side)
+    return lam, p_cover_negbin(lam, line, side, HRR_DISPERSION)
 
 
 # --------------------------------------------------------------------------- #

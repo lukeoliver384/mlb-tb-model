@@ -208,6 +208,14 @@ if go:
 slate = st.session_state.get("slate")
 savant_bat, savant_pit = st.session_state.get("savant", ({}, {}))
 arse_bat, arse_pit = st.session_state.get("arsenal", ({}, {}))
+_lr = load_league_rates(int(season))
+if _lr:
+    E.LEAGUE_EVENT_RATES.update({k: _lr[k] for k in ("1B", "2B", "3B", "HR")})
+    E.LEAGUE_HRR.update({"H": _lr["H"], "R": _lr["R"], "RBI": _lr["RBI"]})
+    E.LEAGUE_TB_PER_PA = _lr["TB"]
+    E.LEAGUE_R_PER_BF = _lr["R"]
+    st.caption(f"League baseline (current season): {_lr['TB']:.3f} TB/PA, {_lr['H']:.3f} H/PA "
+               "— model auto-adjusts to the run environment.")
 if not slate:
     st.info("Pick a date and click **Load slate**. Lineups appear ~3–4 hours before first pitch; "
             "until then you'll see probable pitchers but empty lineups.")

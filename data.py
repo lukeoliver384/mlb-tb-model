@@ -294,35 +294,24 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
     except Exception:
         pass
     try:
-        sp = _people_stats(b.mlbam_id, "hitting", season, splits=True)
+        sp = _people_stats(b.mlbam_id, "hitting", season, splits=True, sit_codes="vl,vr,h,a")
         for split in sp["stats"][0]["splits"]:
             code = split.get("split", {}).get("code", "")
             st = split["stat"]
             if code == "vl":
-                b.pa_vs_l = float(st.get("plateAppearances", 0))
-                b.tb_vs_l = float(st.get("totalBases", 0))
+                b.pa_vs_l = float(st.get("plateAppearances", 0)); b.tb_vs_l = float(st.get("totalBases", 0))
                 b.h_vs_l = float(st.get("hits", 0)); b.d_vs_l = float(st.get("doubles", 0))
                 b.t_vs_l = float(st.get("triples", 0)); b.hr_vs_l = float(st.get("homeRuns", 0))
             elif code == "vr":
-                b.pa_vs_r = float(st.get("plateAppearances", 0))
-                b.tb_vs_r = float(st.get("totalBases", 0))
+                b.pa_vs_r = float(st.get("plateAppearances", 0)); b.tb_vs_r = float(st.get("totalBases", 0))
                 b.h_vs_r = float(st.get("hits", 0)); b.d_vs_r = float(st.get("doubles", 0))
                 b.t_vs_r = float(st.get("triples", 0)); b.hr_vs_r = float(st.get("homeRuns", 0))
-    except Exception:
-        pass
-    try:
-        ha = _people_stats(b.mlbam_id, "hitting", season, splits=True, sit_codes="h,a")
-        for split in ha["stats"][0]["splits"]:
-            code = split.get("split", {}).get("code", "")
-            st = split["stat"]
-            if code == "h":
+            elif code == "h":
                 b.pa_home = float(st.get("plateAppearances", 0)); b.tb_home = float(st.get("totalBases", 0))
             elif code == "a":
                 b.pa_away = float(st.get("plateAppearances", 0)); b.tb_away = float(st.get("totalBases", 0))
     except Exception:
         pass
-    if not b.bats:
-        b.bats = batter_bats(b.mlbam_id)
     return b
 
 
@@ -345,7 +334,7 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
     except Exception:
         pass
     try:
-        sp = _people_stats(p.mlbam_id, "pitching", season, splits=True)
+        sp = _people_stats(p.mlbam_id, "pitching", season, splits=True, sit_codes="vl,vr,h,a")
         for split in sp["stats"][0]["splits"]:
             code = split.get("split", {}).get("code", "")
             st = split["stat"]
@@ -360,14 +349,7 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
                 p.bf_vs_r = float(st.get("battersFaced", 0))
                 p.h_vs_r = float(st.get("hits", 0)); p.d_vs_r = float(st.get("doubles", 0))
                 p.t_vs_r = float(st.get("triples", 0)); p.hr_vs_r = float(st.get("homeRuns", 0))
-    except Exception:
-        pass
-    try:
-        ha = _people_stats(p.mlbam_id, "pitching", season, splits=True, sit_codes="h,a")
-        for split in ha["stats"][0]["splits"]:
-            code = split.get("split", {}).get("code", "")
-            st = split["stat"]
-            if code == "h":
+            elif code == "h":
                 p.bf_home = float(st.get("battersFaced", 0)); p.tb_home_allowed = _tb_allowed(st)
             elif code == "a":
                 p.bf_away = float(st.get("battersFaced", 0)); p.tb_away_allowed = _tb_allowed(st)
@@ -425,6 +407,28 @@ def load_fangraphs_csv(path_or_buffer):
 # --------------------------------------------------------------------------- #
 # Recent form (MLB StatsAPI byDateRange)                                       #
 # --------------------------------------------------------------------------- #
+def league_event_rates(season: int):
+    """Current-season league per-PA rates from team totals (auto-adjusts the baseline
+    to the run environment). Returns dict with 1B/2B/3B/HR/H/R/RBI/TB per PA, or None."""
+    try:
+        d = _get(f"{STATSAPI}/teams/stats", season=season, group="hitting",
+                 stats="season", sportId=1)
+        H = D2 = D3 = HR = R = RBI = TB = PA = 0.0
+        for sp in d["stats"][0]["splits"]:
+            s = sp["stat"]
+            H += float(s.get("hits", 0)); D2 += float(s.get("doubles", 0))
+            D3 += float(s.get("triples", 0)); HR += float(s.get("homeRuns", 0))
+            R += float(s.get("runs", 0)); RBI += float(s.get("rbi", 0))
+            TB += float(s.get("totalBases", 0)); PA += float(s.get("plateAppearances", 0))
+        if PA < 1000:
+            return None
+        singles = H - D2 - D3 - HR
+        return {"1B": singles / PA, "2B": D2 / PA, "3B": D3 / PA, "HR": HR / PA,
+                "H": H / PA, "R": R / PA, "RBI": RBI / PA, "TB": TB / PA}
+    except Exception:
+        return None
+
+
 def final_venues(date: str) -> set:
     """Set of venue names whose games are complete on the date (for as-you-go grading)."""
     try:
@@ -600,7 +604,7 @@ def get_weather(lat: float, lon: float, iso_dt_utc: str):
 # --------------------------------------------------------------------------- #
 def build_slate(date: str, season: int, recent_days: int = 0,
                 want_weather: bool = False, park_geo: dict = None,
-                max_workers: int = 16) -> list[Matchup]:
+                max_workers: int = 24) -> list[Matchup]:
     """
     Build the full slate, fetching all player stats in parallel.
 
@@ -625,6 +629,21 @@ def build_slate(date: str, season: int, recent_days: int = 0,
     pitchers = [getattr(mu, a) for mu in games
                 for a in ("home_pitcher", "away_pitcher") if getattr(mu, a)]
     batters = [b for mu in games for b in (mu.home_lineup + mu.away_lineup)]
+
+    # batch handedness for all hitters in one call per chunk (instead of one each)
+    try:
+        ids = [str(b.mlbam_id) for b in batters if b.mlbam_id]
+        hand = {}
+        for i in range(0, len(ids), 100):
+            chunk = ",".join(ids[i:i + 100])
+            people = _get(f"{STATSAPI}/people", personIds=chunk)
+            for person in people.get("people", []):
+                hand[person.get("id")] = person.get("batSide", {}).get("code", "")
+        for b in batters:
+            if not b.bats:
+                b.bats = hand.get(b.mlbam_id, "")
+    except Exception:
+        pass
 
     def _do_pitcher(p: Pitcher):
         try:
