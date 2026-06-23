@@ -443,6 +443,7 @@ def league_event_rates(season: int):
             D3 += float(s.get("triples", 0)); HR += float(s.get("homeRuns", 0))
             R += float(s.get("runs", 0)); RBI += float(s.get("rbi", 0))
             TB += float(s.get("totalBases", 0)); PA += float(s.get("plateAppearances", 0))
+            SO += float(s.get("strikeOuts", 0))
         if PA < 1000:
             return None
         singles = H - D2 - D3 - HR

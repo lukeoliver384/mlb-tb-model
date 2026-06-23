@@ -150,9 +150,11 @@ def log5_rate(batter: float, pitcher: float, league: float = LEAGUE_TB_PER_PA) -
         (b*p/l) / (b*p/l + (1-b)(1-p)/(1-l))
     Returns the matchup TB/PA rate.
     """
+    if league <= 0 or league >= 1:
+        return batter  # degenerate league baseline: fall back to batter rate
     num = batter * pitcher / league
     denom = num + (1 - batter) * (1 - pitcher) / (1 - league)
-    return num / denom
+    return num / denom if denom else batter
 
 
 def blend(actual: float, expected: "float | None", w_expected: float) -> float:

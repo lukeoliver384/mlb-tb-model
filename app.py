@@ -21,6 +21,27 @@ import tracker as T
 
 st.set_page_config(page_title="MLB TB Model", page_icon="⚾", layout="wide")
 
+# --- Deployment version guard: catch stale/partial uploads with a clear message ---
+import inspect as _inspect
+_stale = []
+for _attr in ("LEAGUE_K_PA",):
+    if not hasattr(E, _attr):
+        _stale.append(f"engine.{_attr}")
+try:
+    if "sp_share" not in _inspect.signature(E.project_hrr).parameters:
+        _stale.append("engine.project_hrr(sp_share)")
+except Exception:
+    _stale.append("engine.project_hrr")
+if _stale:
+    st.error(
+        "⚠️ The server is running an out-of-date **engine.py** (missing: "
+        + ", ".join(_stale)
+        + "). Re-upload engine.py (and the full file set) to GitHub, then reboot from "
+        "Manage app → Reboot."
+    )
+    st.stop()
+# --- end guard ---
+
 st.markdown("""<style>
 footer {visibility: hidden;}
 .block-container {max-width: 1320px;}
@@ -223,7 +244,7 @@ if _lr:
     E.LEAGUE_HRR.update({k: _lr[k] for k in ("H", "R", "RBI") if k in _lr})
     if "TB" in _lr: E.LEAGUE_TB_PER_PA = _lr["TB"]
     if "R" in _lr:  E.LEAGUE_R_PER_BF = _lr["R"]
-    if "K" in _lr and hasattr(E, "LEAGUE_K_PA"): E.LEAGUE_K_PA = _lr["K"]
+    if _lr.get("K", 0) > 0 and hasattr(E, "LEAGUE_K_PA"): E.LEAGUE_K_PA = _lr["K"]
     if "TB" in _lr and "H" in _lr:
         st.caption(f"League baseline (current season): {_lr['TB']:.3f} TB/PA, {_lr['H']:.3f} H/PA "
                    "— model auto-adjusts to the run environment.")
