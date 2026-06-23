@@ -85,7 +85,7 @@ _seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
 _seed("ui_regk", int(E.REG_K_PA))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
-_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4)
+_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5)
 _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
 _seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
 _seed("ui_statcast", True); _seed("ui_wstatcast", 0.5); _seed("ui_arsenal", False)
@@ -137,6 +137,8 @@ with st.sidebar:
                              help="Overdispersion for H+R+RBI. 1.0 = Poisson (most confident); higher spreads probabilities toward 50%. Tune via the confidence-vs-actual tracker.")
         k_disp = st.slider("Strikeouts variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_kdisp",
                            help="Overdispersion for pitcher Ks. 1.0 = Poisson; higher accounts for workload swings.")
+        lineup_ctx = st.slider("H+R+RBI lineup-spot context", 0.0, 1.0, step=0.05, key="ui_lineupctx",
+                               help="Re-rates a hitter's R/RBI for today's batting slot (RBI up in the middle, runs up at the top). Damped because season rates already reflect a player's usual spot. 0 = off.")
 
     with st.expander("Park & weather", expanded=False):
         use_park = st.checkbox("Apply park factors", key="ui_park")
@@ -169,7 +171,7 @@ with st.sidebar:
 
 # Persist sidebar settings (one write only when something changed)
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
-           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib", "ui_hrrdisp", "ui_kdisp",
+           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
            "ui_kwhiff", "ui_wkwhiff"]
@@ -406,11 +408,13 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
                 ha *= E.arsenal_factor(arse_bat[b.mlbam_id], arse_pit[opp_pitcher.mlbam_id],
                                        savant_bat.get(b.mlbam_id, {}).get("xwoba", 0.320))
             park_runs = pmult * (wmult.get("HR", 1.0) if wmult else 1.0)
+            _r_ctx, _rbi_ctx = PF.lineup_run_context(b.order, lineup_ctx)
             lam, p_cover = E.project_hrr(
                 h_pa * ha, b.pa, p_h_bf, max(opp_pitcher.bf, 1),
                 b.runs_per_pa * ha, b.rbi_per_pa * ha, opp_pitcher.r_per_bf,
                 line=default_line, side="Over", expected_pa=total_pa,
-                park_hits=pmult, park_runs=park_runs, reg_k=int(reg_k), sp_share=this_share)
+                park_hits=pmult, park_runs=park_runs, reg_k=int(reg_k), sp_share=this_share,
+                r_ctx=_r_ctx, rbi_ctx=_rbi_ctx)
             p_cover = _calibrate(p_cover)
             rows.append({
                 "Batter": b.name, "Slot": b.order, "B": b.bats,

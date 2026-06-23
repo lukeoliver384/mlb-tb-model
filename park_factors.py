@@ -86,6 +86,30 @@ def expected_pa(slot: int) -> float:
     return PA_BY_SLOT.get(slot, 4.3)
 
 
+# Run/RBI context by batting slot, normalized to ~1.0 across the nine spots. RBI rises
+# in the middle of the order (more runners on base ahead); runs rise at the top (better
+# hitters behind to drive you in + the lineup turns over). These re-rate a hitter's OWN
+# season R/RBI per-PA rate for the slot he is hitting in TODAY. Because the season rate
+# already embeds his usual slot, apply through a damping `strength` (<1) so the change
+# mostly affects hitters batting somewhere unusual.
+_RBI_CTX_RAW = {1: 0.82, 2: 0.90, 3: 1.10, 4: 1.18, 5: 1.12, 6: 1.03, 7: 0.95, 8: 0.90, 9: 0.85}
+_R_CTX_RAW   = {1: 1.15, 2: 1.12, 3: 1.06, 4: 1.00, 5: 0.96, 6: 0.93, 7: 0.91, 8: 0.89, 9: 0.93}
+
+def _norm_ctx(d):
+    m = sum(d.values()) / len(d)
+    return {k: v / m for k, v in d.items()}
+
+RBI_CTX_BY_SLOT = _norm_ctx(_RBI_CTX_RAW)
+R_CTX_BY_SLOT = _norm_ctx(_R_CTX_RAW)
+
+def lineup_run_context(slot: int, strength: float = 1.0):
+    """(runs_mult, rbi_mult) for a batting slot, centered at 1.0 and damped by `strength`
+    (0 = off, 1 = full slot effect)."""
+    rc = R_CTX_BY_SLOT.get(slot, 1.0)
+    bc = RBI_CTX_BY_SLOT.get(slot, 1.0)
+    return (1 + strength * (rc - 1), 1 + strength * (bc - 1))
+
+
 # Per-event park factors by batter hand (1B/2B/3B/HR multipliers), from the same
 # Savant 2023-2025 per-event indices, shrunk 15% toward 1.0 (triples clamped).
 # Lets the park reshape the XBH-vs-singles mix by handedness, not just overall level.
