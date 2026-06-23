@@ -73,10 +73,10 @@ with st.sidebar:
     st.header("Slate")
     date = st.date_input("Date", dt.date.today())
     season = st.number_input("Stats season", 2015, 2030, dt.date.today().year)
-    prop = st.radio("Prop", ["Total Bases", "Hits + Runs + RBIs"], key="ui_prop",
-                    help="HRR: Hits is a clean matchup; Runs/RBIs scaled by run-suppression + run env.")
-    STAT = "TB" if prop.startswith("Total") else "HRR"
-    proj_col = "Proj TB" if STAT == "TB" else "Proj HRR"
+    prop = st.radio("Prop", ["Total Bases", "Hits + Runs + RBIs", "Pitcher Strikeouts"], key="ui_prop",
+                    help="Pitcher Ks: projected from each batter in the day's lineup (vs-hand K%), PA-weighted.")
+    STAT = "TB" if prop.startswith("Total") else ("HRR" if prop.startswith("Hits") else "K")
+    proj_col = {"TB": "Proj TB", "HRR": "Proj HRR", "K": "Proj Ks"}[STAT]
 
     with st.expander("Lines & staking", expanded=False):
         default_line = st.number_input("Default TB line", 0.5, 5.5, step=0.5, key="ui_line")
@@ -223,6 +223,7 @@ if _lr:
     E.LEAGUE_HRR.update({"H": _lr["H"], "R": _lr["R"], "RBI": _lr["RBI"]})
     E.LEAGUE_TB_PER_PA = _lr["TB"]
     E.LEAGUE_R_PER_BF = _lr["R"]
+    E.LEAGUE_K_PA = _lr.get("K", E.LEAGUE_K_PA)
     st.caption(f"League baseline (current season): {_lr['TB']:.3f} TB/PA, {_lr['H']:.3f} H/PA "
                "— model auto-adjusts to the run environment.")
 league_rate = E.LEAGUE_TB_PER_PA
@@ -262,6 +263,54 @@ st.caption(f"Bankroll for sizing: **${current_bk:,.2f}** (current balance, as en
 # --------------------------------------------------------------------------- #
 # Project every batter vs opposing starter                                    #
 # --------------------------------------------------------------------------- #
+K_LINE_DEFAULT = 5.5
+
+def project_pitcher_k(pitcher, lineup):
+    """PA-weighted projected strikeouts for a starter vs the day's lineup (vs-hand K%)."""
+    if not pitcher or not lineup:
+        return None
+    pk = E.regress(pitcher.k_per_bf, pitcher.bf, E.LEAGUE_K_PA, int(reg_k))
+    if pk <= 0:
+        return None
+    total_k = bf_used = 0.0
+    for b in lineup:
+        k_pa, k_n = b.k_per_pa_vs(pitcher.throws)
+        bk = E.regress(k_pa, k_n, E.LEAGUE_K_PA, int(reg_k))
+        km = E.log5_rate(bk, pk, E.LEAGUE_K_PA)
+        tp = PF.expected_pa(b.order)
+        exp_pa = (E.pa_vs_starter(b.order, pitcher.bf_per_start, tp)
+                  if pitcher.bf_per_start > 0 else tp)
+        total_k += km * exp_pa
+        bf_used += exp_pa
+    return total_k, bf_used
+
+
+def build_k_rows(slate):
+    rows = []
+    for mu in slate:
+        for pit, opp_lineup, opp_team in [(mu.home_pitcher, mu.away_lineup, mu.away),
+                                          (mu.away_pitcher, mu.home_lineup, mu.home)]:
+            res = project_pitcher_k(pit, opp_lineup)
+            if not res:
+                continue
+            lam, bf = res
+            p_over = E.p_cover_poisson(lam, K_LINE_DEFAULT, "Over")
+            rows.append({
+                "Game": f"{mu.away} @ {mu.home}", "Batter": pit.name, "Slot": "",
+                "B": pit.throws, "vs Pitcher": f"vs {opp_team}", "P": "",
+                "Line": K_LINE_DEFAULT, "vsSP%": round(bf),
+                "Proj Ks": round(lam, 2), "P(Over)": round(p_over, 3),
+                "Fair Over odds": round(E.prob_to_american(p_over), 0),
+                "Conf": E.confidence_score(pit.bf, pit.bf, 100, False),
+                "_bid": pit.mlbam_id, "_lam": round(lam, 4), "_dist": None,
+                "_b_rate": 0, "_p_rate": round(pit.k_per_bf, 3),
+                "_matchup": round(lam / bf, 3) if bf else 0, "_exp_pa": round(bf, 1),
+                "_park": 1.0, "_bpa": round(pit.bf), "_pbf": round(pit.bf), "_recent": None,
+                "Venue": mu.venue, "Wx": "",
+            })
+    return rows
+
+
 def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, pitcher_is_home=False):
     rows = []
     if not opp_pitcher:
@@ -416,8 +465,7 @@ def matchup_weather(mu):
 
 # Compute projections ONLY when the slate is (re)loaded, then freeze them in the
 # session so reruns (typing odds, logging bets) and forecast updates don't move them.
-_proj_stale = st.session_state.get("proj_meta") != (date.isoformat(), STAT)
-if go or st.session_state.get("proj_df") is None or _proj_stale:
+def _build_batter_rows(slate):
     all_rows = []
     for mu in slate:
         wm, wx = matchup_weather(mu)
@@ -427,6 +475,14 @@ if go or st.session_state.get("proj_df") is None or _proj_stale:
         all_rows += [{**r, "Game": f"{mu.away} @ {mu.home}", "Venue": mu.venue, "Wx": wx}
                      for r in project_side(mu.home_lineup, mu.away_pitcher, mu.venue, wm,
                                            batter_is_home=True, pitcher_is_home=False)]
+    return all_rows
+
+_proj_stale = st.session_state.get("proj_meta") != (date.isoformat(), STAT)
+if go or st.session_state.get("proj_df") is None or _proj_stale:
+    if STAT == "K":
+        all_rows = build_k_rows(slate)
+    else:
+        all_rows = _build_batter_rows(slate)
     if not all_rows:
         st.warning("No projections yet — lineups likely not posted. Probable pitchers below.")
         for mu in slate:
@@ -437,6 +493,8 @@ if go or st.session_state.get("proj_df") is None or _proj_stale:
     _frozen = pd.DataFrame(all_rows)
     st.session_state["proj_df"] = _frozen
     st.session_state["proj_meta"] = (date.isoformat(), STAT)
+
+
 
 df = st.session_state["proj_df"]
 
