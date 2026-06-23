@@ -310,10 +310,25 @@ K_LINE_DEFAULT = 5.5
 
 def project_pitcher_k(pitcher, lineup):
     """PA-weighted projected strikeouts for a starter vs the day's lineup (vs-hand K%)."""
-    if not pitcher or not lineup:
+    if not pitcher:
         return None
-    if pitcher.k_per_bf <= 0:
-        return None
+    bf_start = pitcher.bf_per_start if pitcher.bf_per_start > 0 else 24.0
+
+    def _pk_overall():
+        v = E.regress(pitcher.k_per_bf, pitcher.bf, E.LEAGUE_K_PA, int(reg_k))
+        if use_kwhiff and whiff_map and league_whiff:
+            imp = E.swstr_implied_k(whiff_map.get(pitcher.mlbam_id), league_whiff)
+            if imp:
+                t = max(0.0, (250.0 - pitcher.bf) / 250.0)
+                we = min(1.0, w_kwhiff + (1 - w_kwhiff) * 0.5 * t)
+                v = we * imp + (1 - we) * v
+        return v
+
+    if not lineup:
+        # Opposing lineup not posted yet -> project vs a league-average lineup so the
+        # confirmed starter still appears. (Matchup K/PA vs a league batter == pk.)
+        return _pk_overall() * bf_start, bf_start, True
+
     total_k = bf_used = 0.0
     for b in lineup:
         k_pa, k_n = b.k_per_pa_vs(pitcher.throws)
@@ -332,7 +347,7 @@ def project_pitcher_k(pitcher, lineup):
                   if pitcher.bf_per_start > 0 else tp)
         total_k += km * exp_pa
         bf_used += exp_pa
-    return total_k, bf_used
+    return total_k, bf_used, False
 
 
 def build_k_rows(slate):
@@ -343,11 +358,11 @@ def build_k_rows(slate):
             res = project_pitcher_k(pit, opp_lineup)
             if not res:
                 continue
-            lam, bf = res
+            lam, bf, est = res
             p_over = E.p_cover_negbin(lam, K_LINE_DEFAULT, "Over", E.K_DISPERSION)
             rows.append({
                 "Game": f"{mu.away} @ {mu.home}", "Batter": pit.name, "Slot": "",
-                "B": pit.throws, "vs Pitcher": f"vs {opp_team}", "P": "",
+                "B": pit.throws, "vs Pitcher": f"vs {opp_team}" + (" (lineup TBD)" if est else ""), "P": "",
                 "Line": K_LINE_DEFAULT, "vsSP%": round(bf),
                 "Proj Ks": round(lam, 2), "P(Over)": round(p_over, 3),
                 "Fair Over odds": round(E.prob_to_american(p_over), 0),
