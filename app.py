@@ -89,6 +89,7 @@ _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _s
 _seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
 _seed("ui_statcast", True); _seed("ui_wstatcast", 0.5); _seed("ui_arsenal", False)
 _seed("ui_recent", True); _seed("ui_recentdays", 21); _seed("ui_wrecent", 0.35)
+_seed("ui_kwhiff", True); _seed("ui_wkwhiff", 0.5)
 
 with st.sidebar:
     st.header("Slate")
@@ -152,6 +153,10 @@ with st.sidebar:
         use_recent = st.checkbox("Blend recent form", key="ui_recent")
         recent_days = st.slider("Window (days)", 7, 45, step=1, key="ui_recentdays", disabled=not use_recent)
         w_recent = st.slider("Weight on recent vs season", 0.0, 1.0, step=0.05, key="ui_wrecent", disabled=not use_recent)
+        st.caption("Pitcher Strikeouts prop:")
+        use_kwhiff = st.checkbox("Stabilize Ks with SwStr% (whiff)", key="ui_kwhiff",
+                                 help="Blends a swinging-strike-implied K rate into the pitcher's K%. SwStr stabilizes faster than raw K% — most useful early season.")
+        w_kwhiff = st.slider("Weight on SwStr-implied K", 0.0, 1.0, step=0.05, key="ui_wkwhiff", disabled=not use_kwhiff)
 
     with st.expander("Fangraphs CSV (optional)", expanded=False):
         st.caption("Overrides MLB-API batter TB/PA")
@@ -161,7 +166,8 @@ with st.sidebar:
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
            "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
-           "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent"]
+           "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
+           "ui_kwhiff", "ui_wkwhiff"]
 _newui = json.dumps({k: st.session_state.get(k) for k in _uikeys}, default=str, sort_keys=True)
 if _newui != _ui_saved_raw:
     try:
@@ -199,6 +205,16 @@ def load_arsenal(season: int):
     except Exception:
         return {}, {}
 
+@st.cache_data(ttl=3600, show_spinner="Pulling SwStr / whiff data…")
+def load_whiff(season: int):
+    fn = getattr(D, "load_pitcher_whiff", None)
+    if fn is None:
+        return {}
+    try:
+        return fn(season)
+    except Exception:
+        return {}
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_league_rates(season: int):
     fn = getattr(D, "league_event_rates", None)
@@ -232,12 +248,17 @@ if go:
         st.session_state["slate"] = load(date.isoformat(), int(season), use_recent, int(recent_days), use_weather)
         st.session_state["savant"] = load_savant(int(season)) if use_statcast else ({}, {})
         st.session_state["arsenal"] = load_arsenal(int(season)) if use_arsenal else ({}, {})
+        st.session_state["whiff"] = load_whiff(int(season)) if use_kwhiff else {}
     except Exception as ex:
         st.error(f"Could not load slate: {ex}")
 
 slate = st.session_state.get("slate")
 savant_bat, savant_pit = st.session_state.get("savant", ({}, {}))
 arse_bat, arse_pit = st.session_state.get("arsenal", ({}, {}))
+whiff_map = st.session_state.get("whiff", {})
+import statistics as _stats
+_wv = [v for v in whiff_map.values() if v and v > 0]
+league_whiff = _stats.median(_wv) if _wv else None
 _lr = load_league_rates(int(season))
 if _lr:
     E.LEAGUE_EVENT_RATES.update({k: _lr[k] for k in ("1B", "2B", "3B", "HR") if k in _lr})
@@ -291,13 +312,20 @@ def project_pitcher_k(pitcher, lineup):
     """PA-weighted projected strikeouts for a starter vs the day's lineup (vs-hand K%)."""
     if not pitcher or not lineup:
         return None
-    pk = E.regress(pitcher.k_per_bf, pitcher.bf, E.LEAGUE_K_PA, int(reg_k))
-    if pk <= 0:
+    if pitcher.k_per_bf <= 0:
         return None
     total_k = bf_used = 0.0
     for b in lineup:
         k_pa, k_n = b.k_per_pa_vs(pitcher.throws)
         bk = E.regress(k_pa, k_n, E.LEAGUE_K_PA, int(reg_k))
+        p_k_bf, p_k_n = pitcher.k_per_bf_vs(b.bats) if use_splits else (pitcher.k_per_bf, pitcher.bf)
+        pk = E.regress(p_k_bf, p_k_n, E.LEAGUE_K_PA, int(reg_k))
+        if use_kwhiff and whiff_map and league_whiff:
+            implied = E.swstr_implied_k(whiff_map.get(pitcher.mlbam_id), league_whiff)
+            if implied:
+                tilt = max(0.0, (250.0 - p_k_n) / 250.0)        # lean on SwStr when BF small
+                w_eff = min(1.0, w_kwhiff + (1 - w_kwhiff) * 0.5 * tilt)
+                pk = w_eff * implied + (1 - w_eff) * pk
         km = E.log5_rate(bk, pk, E.LEAGUE_K_PA)
         tp = PF.expected_pa(b.order)
         exp_pa = (E.pa_vs_starter(b.order, pitcher.bf_per_start, tp)
@@ -316,7 +344,7 @@ def build_k_rows(slate):
             if not res:
                 continue
             lam, bf = res
-            p_over = E.p_cover_poisson(lam, K_LINE_DEFAULT, "Over")
+            p_over = E.p_cover_negbin(lam, K_LINE_DEFAULT, "Over", E.K_DISPERSION)
             rows.append({
                 "Game": f"{mu.away} @ {mu.home}", "Batter": pit.name, "Slot": "",
                 "B": pit.throws, "vs Pitcher": f"vs {opp_team}", "P": "",

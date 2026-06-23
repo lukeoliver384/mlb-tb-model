@@ -51,11 +51,13 @@ class Pitcher:
     d_vs_l: float = 0.0
     t_vs_l: float = 0.0
     hr_vs_l: float = 0.0
+    k_vs_l: float = 0.0
     bf_vs_r: float = 0.0
     h_vs_r: float = 0.0
     d_vs_r: float = 0.0
     t_vs_r: float = 0.0
     hr_vs_r: float = 0.0
+    k_vs_r: float = 0.0
     bf_home: float = 0.0
     tb_home_allowed: float = 0.0
     bf_away: float = 0.0
@@ -80,6 +82,14 @@ class Pitcher:
     @property
     def k_per_bf(self) -> float:
         return self.k_allowed / self.bf if self.bf else 0.0
+
+    def k_per_bf_vs(self, bat_side: str):
+        """Pitcher K/BF vs the batter's side (min 50 BF), else overall (k_per_bf, n=bf)."""
+        if bat_side.upper() in ("L", "S") and self.bf_vs_l >= 50 and self.k_vs_l:
+            return self.k_vs_l / self.bf_vs_l, self.bf_vs_l
+        if bat_side.upper() == "R" and self.bf_vs_r >= 50 and self.k_vs_r:
+            return self.k_vs_r / self.bf_vs_r, self.bf_vs_r
+        return self.k_per_bf, self.bf
 
     def event_rates_allowed_vs(self, bat_side: str):
         """Per-BF {1B,2B,3B,HR} allowed vs batter side; falls back to overall."""
@@ -367,11 +377,13 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
                 p.bf_vs_l = float(st.get("battersFaced", 0))
                 p.h_vs_l = float(st.get("hits", 0)); p.d_vs_l = float(st.get("doubles", 0))
                 p.t_vs_l = float(st.get("triples", 0)); p.hr_vs_l = float(st.get("homeRuns", 0))
+                p.k_vs_l = float(st.get("strikeOuts", 0))
             elif code == "vr":
                 p.tb_per_bf_vs_r = _tb_allowed(st) / bf
                 p.bf_vs_r = float(st.get("battersFaced", 0))
                 p.h_vs_r = float(st.get("hits", 0)); p.d_vs_r = float(st.get("doubles", 0))
                 p.t_vs_r = float(st.get("triples", 0)); p.hr_vs_r = float(st.get("homeRuns", 0))
+                p.k_vs_r = float(st.get("strikeOuts", 0))
             elif code == "h":
                 p.bf_home = float(st.get("battersFaced", 0)); p.tb_home_allowed = _tb_allowed(st)
             elif code == "a":
@@ -559,6 +571,41 @@ def load_savant_expected(season: int, kind: str = "batter") -> dict:
                 continue
             if slg > 0 and est > 0:
                 out[pid] = {"slg": slg, "est_slg": est, "luck": est / slg}
+    except Exception:
+        pass
+    return out
+
+
+def load_pitcher_whiff(season: int) -> dict:
+    """Usage-weighted whiff% (whiffs/swings) per pitcher from Savant pitch-arsenal CSV.
+    Returns {player_id: whiff_fraction}. SwStr/whiff stabilizes faster than K%, so it
+    sharpens the pitcher K rate — most valuable early in a season."""
+    url = ("https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats"
+           f"?type=pitcher&year={season}&min=50&csv=true")
+    out = {}
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        import io, csv
+        reader = csv.DictReader(io.StringIO(r.text))
+        agg = {}
+        for row in reader:
+            try:
+                pid = int(row.get("player_id") or row.get("\ufeffplayer_id"))
+            except (TypeError, ValueError):
+                continue
+            try:
+                usage = float(row.get("pitch_usage") or 0) / 100.0
+                whiff = float(row.get("whiff_percent") or 0) / 100.0
+            except (TypeError, ValueError):
+                continue
+            if usage <= 0 or whiff <= 0:
+                continue
+            w, u = agg.get(pid, (0.0, 0.0))
+            agg[pid] = (w + usage * whiff, u + usage)
+        for pid, (w, u) in agg.items():
+            if u > 0:
+                out[pid] = w / u
     except Exception:
         pass
     return out

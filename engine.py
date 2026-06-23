@@ -28,6 +28,7 @@ LEAGUE_HRR = {"H": 0.235, "R": 0.115, "RBI": 0.110}
 LEAGUE_R_PER_BF = 0.118
 LEAGUE_K_PA = 0.225   # league strikeouts per PA (updated live)
 HRR_DISPERSION = 1.5   # >1 = overdispersed (more 0-1 games than Poisson); tune via calibration
+K_DISPERSION = 1.4    # pitcher Ks: workload (IP/BF) variance widens tails vs Poisson; tune via calibration
 REG_K_PA = 175             # sheet E12 (regression constant, in PA)
 
 
@@ -142,6 +143,16 @@ def regress(raw_rate: float, sample_pa: float,
             league: float = LEAGUE_TB_PER_PA, k: float = REG_K_PA) -> float:
     """Sheet E18/G18: (raw*n + league*K)/(n+K)."""
     return (raw_rate * sample_pa + league * k) / (sample_pa + k)
+
+
+def swstr_implied_k(whiff, league_whiff, league_k=LEAGUE_K_PA, elasticity=1.25):
+    """SwStr/whiff-implied K rate, anchored multiplicatively to league so it self-calibrates:
+    a pitcher whiffing X% above league projects league_k * (X) ** elasticity. Capped to a
+    sane band. Returns None if inputs missing."""
+    if not whiff or not league_whiff or league_whiff <= 0:
+        return None
+    implied = league_k * (whiff / league_whiff) ** elasticity
+    return max(0.08, min(0.45, implied))
 
 
 def log5_rate(batter: float, pitcher: float, league: float = LEAGUE_TB_PER_PA) -> float:
