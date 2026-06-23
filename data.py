@@ -41,6 +41,7 @@ class Pitcher:
     tb_per_bf_vs_r: float = 0.0
     games_started: float = 0.0
     r_allowed: float = 0.0
+    k_allowed: float = 0.0
     h_allowed: float = 0.0
     d_allowed: float = 0.0
     t_allowed: float = 0.0
@@ -75,6 +76,10 @@ class Pitcher:
     @property
     def r_per_bf(self) -> float:
         return self.r_allowed / self.bf if self.bf else 0.0
+
+    @property
+    def k_per_bf(self) -> float:
+        return self.k_allowed / self.bf if self.bf else 0.0
 
     def event_rates_allowed_vs(self, bat_side: str):
         """Per-BF {1B,2B,3B,HR} allowed vs batter side; falls back to overall."""
@@ -137,6 +142,9 @@ class Batter:
     tb_away: float = 0.0
     runs: float = 0.0
     rbi: float = 0.0
+    k: float = 0.0
+    k_vs_l: float = 0.0
+    k_vs_r: float = 0.0
 
     @property
     def tb_per_pa(self) -> float:
@@ -154,6 +162,17 @@ class Batter:
     @property
     def rbi_per_pa(self) -> float:
         return self.rbi / self.pa if self.pa else 0.0
+
+    @property
+    def k_per_pa(self) -> float:
+        return self.k / self.pa if self.pa else 0.0
+
+    def k_per_pa_vs(self, throws: str):
+        if throws.upper() == "L" and self.pa_vs_l >= 30 and self.k_vs_l:
+            return self.k_vs_l / self.pa_vs_l, self.pa_vs_l
+        if throws.upper() == "R" and self.pa_vs_r >= 30 and self.k_vs_r:
+            return self.k_vs_r / self.pa_vs_r, self.pa_vs_r
+        return self.k_per_pa, self.pa
 
     def tb_per_pa_vs(self, throws: str) -> tuple[float, float]:
         """Return (rate, sample_pa) split vs the pitcher's handedness."""
@@ -291,6 +310,7 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
         b.hr = float(s.get("homeRuns", 0))
         b.runs = float(s.get("runs", 0))
         b.rbi = float(s.get("rbi", 0))
+        b.k = float(s.get("strikeOuts", 0))
     except Exception:
         pass
     try:
@@ -302,10 +322,12 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
                 b.pa_vs_l = float(st.get("plateAppearances", 0)); b.tb_vs_l = float(st.get("totalBases", 0))
                 b.h_vs_l = float(st.get("hits", 0)); b.d_vs_l = float(st.get("doubles", 0))
                 b.t_vs_l = float(st.get("triples", 0)); b.hr_vs_l = float(st.get("homeRuns", 0))
+                b.k_vs_l = float(st.get("strikeOuts", 0))
             elif code == "vr":
                 b.pa_vs_r = float(st.get("plateAppearances", 0)); b.tb_vs_r = float(st.get("totalBases", 0))
                 b.h_vs_r = float(st.get("hits", 0)); b.d_vs_r = float(st.get("doubles", 0))
                 b.t_vs_r = float(st.get("triples", 0)); b.hr_vs_r = float(st.get("homeRuns", 0))
+                b.k_vs_r = float(st.get("strikeOuts", 0))
             elif code == "h":
                 b.pa_home = float(st.get("plateAppearances", 0)); b.tb_home = float(st.get("totalBases", 0))
             elif code == "a":
@@ -331,6 +353,7 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
         p.h_allowed = float(st.get("hits", 0)); p.d_allowed = float(st.get("doubles", 0))
         p.t_allowed = float(st.get("triples", 0)); p.hr_allowed = float(st.get("homeRuns", 0))
         p.r_allowed = float(st.get("runs", 0))
+        p.k_allowed = float(st.get("strikeOuts", 0))
     except Exception:
         pass
     try:
@@ -413,7 +436,7 @@ def league_event_rates(season: int):
     try:
         d = _get(f"{STATSAPI}/teams/stats", season=season, group="hitting",
                  stats="season", sportId=1)
-        H = D2 = D3 = HR = R = RBI = TB = PA = 0.0
+        H = D2 = D3 = HR = R = RBI = TB = PA = SO = 0.0
         for sp in d["stats"][0]["splits"]:
             s = sp["stat"]
             H += float(s.get("hits", 0)); D2 += float(s.get("doubles", 0))
@@ -424,7 +447,20 @@ def league_event_rates(season: int):
             return None
         singles = H - D2 - D3 - HR
         return {"1B": singles / PA, "2B": D2 / PA, "3B": D3 / PA, "HR": HR / PA,
-                "H": H / PA, "R": R / PA, "RBI": RBI / PA, "TB": TB / PA}
+                "H": H / PA, "R": R / PA, "RBI": RBI / PA, "TB": TB / PA, "K": SO / PA}
+    except Exception:
+        return None
+
+
+def player_k_on_date(pid: int, season: int, date: str):
+    """Actual pitcher strikeouts on a date from the pitching game log. None if no start."""
+    try:
+        d = _get(f"{STATSAPI}/people/{pid}/stats",
+                 stats="gameLog", group="pitching", season=season, sportId=1)
+        games = [s["stat"] for s in d["stats"][0]["splits"] if s.get("date") == date]
+        if not games:
+            return None
+        return float(sum(float(st.get("strikeOuts", 0)) for st in games))
     except Exception:
         return None
 

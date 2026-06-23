@@ -26,6 +26,7 @@ LEAGUE_EVENT_RATES = {"1B": 0.137, "2B": 0.044, "3B": 0.004, "HR": 0.030}
 # Approximate league per-PA rates for Hits / Runs / RBIs, and runs allowed per BF.
 LEAGUE_HRR = {"H": 0.235, "R": 0.115, "RBI": 0.110}
 LEAGUE_R_PER_BF = 0.118
+LEAGUE_K_PA = 0.225   # league strikeouts per PA (updated live)
 HRR_DISPERSION = 1.5   # >1 = overdispersed (more 0-1 games than Poisson); tune via calibration
 REG_K_PA = 175             # sheet E12 (regression constant, in PA)
 
@@ -174,10 +175,15 @@ def pa_vs_starter(slot: int, sp_bf_per_start: float, total_pa: float) -> float:
     """
     if sp_bf_per_start <= 0 or slot < 1:
         return 0.0
-    if sp_bf_per_start < slot:
-        n = 0.0
+    full = int(sp_bf_per_start // 9)          # full times through the order
+    rem = sp_bf_per_start - full * 9          # batters into the next turn (0-9)
+    if slot <= int(rem):
+        extra = 1.0
+    elif slot == int(rem) + 1:
+        extra = rem - int(rem)                # fractional last batter
     else:
-        n = (sp_bf_per_start - slot) / 9.0 + 1.0  # fractional is fine
+        extra = 0.0
+    n = full + extra
     return max(0.0, min(n, total_pa))
 
 
@@ -336,7 +342,7 @@ def p_cover_poisson(lam: float, line: float, side: str) -> float:
 # --------------------------------------------------------------------------- #
 def project_hrr(h_pa, h_pa_n, p_h_per_bf, p_bf, r_pa, rbi_pa, p_r_per_bf,
                 line, side="Over", expected_pa=4.3,
-                park_hits=1.0, park_runs=1.0, reg_k=REG_K_PA):
+                park_hits=1.0, park_runs=1.0, reg_k=REG_K_PA, sp_share=1.0):
     """
     Hits + Runs + RBIs as a combined per-game count.
 
@@ -361,7 +367,10 @@ def project_hrr(h_pa, h_pa_n, p_h_per_bf, p_bf, r_pa, rbi_pa, p_r_per_bf,
     runs_adj = r * run_supp * park_runs
     rbi_adj = rbi * run_supp * park_runs
 
-    hrr_pa = hits_adj + runs_adj + rbi_adj
+    starter_hrr = hits_adj + runs_adj + rbi_adj
+    # Bullpen share: hitter vs average arms -> his own regressed rates, neutral run env.
+    bullpen_hrr = h * park_hits + r * park_runs + rbi * park_runs
+    hrr_pa = sp_share * starter_hrr + (1 - sp_share) * bullpen_hrr
     lam = hrr_pa * expected_pa
     return lam, p_cover_negbin(lam, line, side, HRR_DISPERSION)
 

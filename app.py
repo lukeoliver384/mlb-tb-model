@@ -219,13 +219,14 @@ savant_bat, savant_pit = st.session_state.get("savant", ({}, {}))
 arse_bat, arse_pit = st.session_state.get("arsenal", ({}, {}))
 _lr = load_league_rates(int(season))
 if _lr:
-    E.LEAGUE_EVENT_RATES.update({k: _lr[k] for k in ("1B", "2B", "3B", "HR")})
-    E.LEAGUE_HRR.update({"H": _lr["H"], "R": _lr["R"], "RBI": _lr["RBI"]})
-    E.LEAGUE_TB_PER_PA = _lr["TB"]
-    E.LEAGUE_R_PER_BF = _lr["R"]
-    E.LEAGUE_K_PA = _lr.get("K", E.LEAGUE_K_PA)
-    st.caption(f"League baseline (current season): {_lr['TB']:.3f} TB/PA, {_lr['H']:.3f} H/PA "
-               "— model auto-adjusts to the run environment.")
+    E.LEAGUE_EVENT_RATES.update({k: _lr[k] for k in ("1B", "2B", "3B", "HR") if k in _lr})
+    E.LEAGUE_HRR.update({k: _lr[k] for k in ("H", "R", "RBI") if k in _lr})
+    if "TB" in _lr: E.LEAGUE_TB_PER_PA = _lr["TB"]
+    if "R" in _lr:  E.LEAGUE_R_PER_BF = _lr["R"]
+    if "K" in _lr and hasattr(E, "LEAGUE_K_PA"): E.LEAGUE_K_PA = _lr["K"]
+    if "TB" in _lr and "H" in _lr:
+        st.caption(f"League baseline (current season): {_lr['TB']:.3f} TB/PA, {_lr['H']:.3f} H/PA "
+                   "— model auto-adjusts to the run environment.")
 league_rate = E.LEAGUE_TB_PER_PA
 if not slate:
     st.info("Pick a date and click **Load slate**. Lineups appear ~3–4 hours before first pitch; "
@@ -354,7 +355,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
                 h_pa * ha, b.pa, p_h_bf, max(opp_pitcher.bf, 1),
                 b.runs_per_pa * ha, b.rbi_per_pa * ha, opp_pitcher.r_per_bf,
                 line=default_line, side="Over", expected_pa=total_pa,
-                park_hits=pmult, park_runs=park_runs, reg_k=int(reg_k))
+                park_hits=pmult, park_runs=park_runs, reg_k=int(reg_k), sp_share=this_share)
             p_cover = _calibrate(p_cover)
             rows.append({
                 "Batter": b.name, "Slot": b.order, "B": b.bats,

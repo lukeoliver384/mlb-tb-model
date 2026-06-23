@@ -168,7 +168,7 @@ def grade(season: int) -> int:
         if not bid:
             continue
         prop = str(row.get("prop") or "TB").upper()
-        fn = D.player_hrr_on_date if prop == "HRR" else D.player_tb_on_date
+        fn = D.player_hrr_on_date if prop == "HRR" else (D.player_k_on_date if prop == "K" else D.player_tb_on_date)
         actual = fn(bid, season, d)
         if actual is None:
             continue
@@ -361,7 +361,7 @@ def grade_bets(season: int) -> int:
         except (ValueError, TypeError):
             continue
         prop = str(row.get("prop") or "TB").upper()
-        fn = D.player_hrr_on_date if prop == "HRR" else D.player_tb_on_date
+        fn = D.player_hrr_on_date if prop == "HRR" else (D.player_k_on_date if prop == "K" else D.player_tb_on_date)
         actual = fn(bid, season, d) if bid else None
         if actual is None:
             bets.at[i, "result"] = "void"; bets.at[i, "profit"] = 0.0
