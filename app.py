@@ -179,6 +179,16 @@ def load_arsenal(season: int):
     except Exception:
         return {}, {}
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_league_rates(season: int):
+    fn = getattr(D, "league_event_rates", None)
+    if fn is None:
+        return None
+    try:
+        return fn(season)
+    except Exception:
+        return None
+
 def _bets_cached():
     if "bets_cache" not in st.session_state:
         st.session_state["bets_cache"] = T.read_bets()
