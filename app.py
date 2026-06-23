@@ -85,6 +85,7 @@ _seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
 _seed("ui_regk", int(E.REG_K_PA))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
+_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4)
 _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
 _seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
 _seed("ui_statcast", True); _seed("ui_wstatcast", 0.5); _seed("ui_arsenal", False)
@@ -132,6 +133,10 @@ with st.sidebar:
                           ["Exact distribution (recommended)", "Poisson (sheet original)"], key="ui_method")
         use_calibration = st.checkbox("Apply calibration correction", key="ui_calib",
                                       help="Re-scales probabilities from graded results. No-op until enough data.")
+        hrr_disp = st.slider("H+R+RBI variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_hrrdisp",
+                             help="Overdispersion for H+R+RBI. 1.0 = Poisson (most confident); higher spreads probabilities toward 50%. Tune via the confidence-vs-actual tracker.")
+        k_disp = st.slider("Strikeouts variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_kdisp",
+                           help="Overdispersion for pitcher Ks. 1.0 = Poisson; higher accounts for workload swings.")
 
     with st.expander("Park & weather", expanded=False):
         use_park = st.checkbox("Apply park factors", key="ui_park")
@@ -164,7 +169,7 @@ with st.sidebar:
 
 # Persist sidebar settings (one write only when something changed)
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
-           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib",
+           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib", "ui_hrrdisp", "ui_kdisp",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
            "ui_kwhiff", "ui_wkwhiff"]
@@ -270,6 +275,8 @@ if _lr:
         st.caption(f"League baseline (current season): {_lr['TB']:.3f} TB/PA, {_lr['H']:.3f} H/PA "
                    "— model auto-adjusts to the run environment.")
 league_rate = E.LEAGUE_TB_PER_PA
+E.HRR_DISPERSION = float(hrr_disp)
+E.K_DISPERSION = float(k_disp)
 if not slate:
     st.info("Pick a date and click **Load slate**. Lineups appear ~3–4 hours before first pitch; "
             "until then you'll see probable pitchers but empty lineups.")
