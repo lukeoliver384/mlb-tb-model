@@ -818,7 +818,7 @@ with tab_bet:
             return {"VALUE": "background-color:#10362C;color:#5DE0BB;font-weight:600",
                     "Lean": "background-color:#3A2E12;color:#E3B341",
                     "Pass": "color:#7A828C"}.get(v, "")
-        _pct = lambda x: "—" if pd.isna(x) else f"{x:.1%}"
+        _pct = lambda x: "—" if pd.isna(x) else f"{x:.2%}"
         _spct = lambda x: "—" if pd.isna(x) else f"{x:+.1%}"
         try:
             sty = rdf.style.format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
