@@ -546,6 +546,45 @@ def _build_batter_rows(slate):
                                            batter_is_home=True, pitcher_is_home=False)]
     return all_rows
 
+def _log_all_props(slate, date_str):
+    """Log TB + H+R+RBI for the whole slate, plus any Ks you've priced (line pulled
+    from the odds sheet so they can be graded). One click covers every prop with odds.
+    Temporarily flips the prop globals to build each, then restores them."""
+    total = 0
+    _save_stat, _save_pc = STAT, proj_col
+    try:
+        _olook = {}
+        for (_d, _pr, _gm, _bt), _rec in T.read_odds().items():
+            _olook[(T._iso(_d), str(_pr).upper(), str(_bt).strip())] = _rec
+    except Exception:
+        _olook = {}
+    try:
+        for _pp, _pcc in (("TB", "Proj TB"), ("HRR", "Proj HRR")):
+            globals()["STAT"] = _pp
+            globals()["proj_col"] = _pcc
+            _rows = _build_batter_rows(slate)
+            if _rows:
+                total += T.log_projections(pd.DataFrame(_rows), date_str, prop=_pp, proj_col=_pcc)
+        globals()["STAT"] = "K"
+        globals()["proj_col"] = "Proj Ks"
+        _keep = []
+        for _r in build_k_rows(slate):
+            _ln = _olook.get((T._iso(date_str), "K", str(_r["Batter"]).strip()), {}).get("line")
+            try:
+                _lnf = float(_ln)
+            except (TypeError, ValueError):
+                continue
+            _r = dict(_r)
+            _r["Line"] = _lnf
+            _r["P(Over)"] = _calibrate(E.p_cover_negbin(_r["_lam"], _lnf, "Over", E.K_DISPERSION))
+            _keep.append(_r)
+        if _keep:
+            total += T.log_projections(pd.DataFrame(_keep), date_str, prop="K", proj_col="Proj Ks")
+    finally:
+        globals()["STAT"] = _save_stat
+        globals()["proj_col"] = _save_pc
+    return total
+
 _proj_stale = st.session_state.get("proj_meta") != (date.isoformat(), STAT)
 if go or st.session_state.get("proj_df") is None or _proj_stale:
     if STAT == "K":
@@ -1047,15 +1086,15 @@ with tab_perf:
 
     tc1, tc2 = st.columns(2)
     with tc1:
-        if st.button("Log today's projections"):
+        if st.button("Log projections", help="Logs all props (TB + H+R+RBI + priced Ks) for the loaded slate."):
             try:
-                n = T.log_projections(df, date.isoformat(), prop=STAT, proj_col=proj_col)
+                n = _log_all_props(slate, date.isoformat())
                 _invalidate_tracker_cache()
-                st.success(f"Logged {n} projections for {date.isoformat()}.")
+                st.success(f"Logged {n} projections (all props) for {date.isoformat()}.")
             except Exception as ex:
                 st.error(f"Log failed: {ex}")
     with tc2:
-        if st.button("Grade past results"):
+        if st.button("Grade results", help="Grades all ungraded projections and bets across every prop."):
             try:
                 n = T.grade(int(season))
                 nb = T.grade_bets(int(season))
@@ -1063,15 +1102,6 @@ with tab_perf:
                 st.success(f"Graded {n} projections and {nb} bets.")
             except Exception as ex:
                 st.error(f"Grade failed: {ex}")
-        if st.button("Re-grade everything (reset)", help="Clears old grades and re-grades with the current data source. Use after a grading fix."):
-            try:
-                T.reset_grades()
-                n = T.grade(int(season))
-                nb = T.grade_bets(int(season))
-                _invalidate_tracker_cache()
-                st.success(f"Reset + re-graded {n} projections and {nb} bets.")
-            except Exception as ex:
-                st.error(f"Re-grade failed: {ex}")
 
     with st.expander("Closing lines & CLV — enter the close for your bets"):
         st.caption("For each bet, enter the closing price of the side you took (American, e.g. -110). "
