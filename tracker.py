@@ -194,6 +194,18 @@ def grade_diagnostic(season: int) -> dict:
             continue
         ud[_iso(row["date"])] += 1
     out["_ungraded_by_date"] = dict(sorted(ud.items()))
+    # raw date values for the first several ungraded rows: raw repr -> _iso -> ==today?
+    samples = []
+    for _, row in log.iterrows():
+        if str(row.get("graded")) in ("1", "1.0", "True"):
+            continue
+        raw = row.get("date")
+        samples.append({"raw": repr(raw), "type": type(raw).__name__,
+                        "iso": _iso(raw), "is_today": _iso(raw) == today,
+                        "prop": str(row.get("prop")), "bid": repr(row.get("batter_id"))})
+        if len(samples) >= 8:
+            break
+    out["_date_samples"] = samples
     out["_today"] = today
     out["_total_rows"] = int(len(log))
     return out
