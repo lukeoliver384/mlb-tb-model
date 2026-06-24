@@ -556,6 +556,50 @@ def reset_grades():
         write_bets(bets)
 
 
+def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0):
+    """Hypothetical FLAT 1-unit bankroll that bets the model's lean on EVERY graded
+    projection at a fixed assumed price. Standardizes everything to one price so you
+    can verify directional edge at full sample size (not just your real bets).
+
+      odds         : assumed American price for every pick (e.g. -110).
+      only_plus_ev : if True, only bet picks whose confidence beats that price's
+                     break-even (i.e. the model thinks it beats the juice); else bet
+                     every lean.
+    Returns (summary_dict, curve_df). Summary has n, wins, hit_rate, breakeven, roi,
+    profit. hit_rate vs breakeven IS your 'hit rate vs implied'.
+    """
+    import pandas as pd
+    empty = pd.DataFrame(columns=["n", "bankroll"])
+    if log is None or log.empty:
+        return {"n": 0}, empty
+    g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    g["p"] = pd.to_numeric(g["p_over"], errors="coerce")
+    g["oh"] = pd.to_numeric(g["over_hit"], errors="coerce")
+    g = g.dropna(subset=["p", "oh"])
+    if g.empty:
+        return {"n": 0}, empty
+    dec = _american_to_decimal(odds)
+    if not dec:
+        return {"n": 0}, empty
+    profit_win = dec - 1.0
+    breakeven = 1.0 / dec
+    g["conf"] = g["p"].apply(lambda p: max(p, 1 - p))
+    g["win"] = ((g["p"] >= 0.5) == (g["oh"] > 0.5))
+    bet = g[g["conf"] >= breakeven] if only_plus_ev else g
+    n = len(bet)
+    if n == 0:
+        return {"n": 0, "breakeven": breakeven}, empty
+    wins = int(bet["win"].sum())
+    profit = wins * profit_win - (n - wins)
+    curve, bk = [], float(start_units)
+    for i, (_, r) in enumerate(bet.iterrows(), 1):
+        bk += profit_win if r["win"] else -1.0
+        curve.append({"n": i, "bankroll": round(bk, 2)})
+    return ({"n": n, "wins": wins, "hit_rate": wins / n, "breakeven": breakeven,
+             "roi": profit / n, "profit": profit, "odds": odds},
+            pd.DataFrame(curve))
+
+
 def calibration_temperature(log: pd.DataFrame):
     """
     Fit a probability 'temperature' from graded projections to correct over/under-
