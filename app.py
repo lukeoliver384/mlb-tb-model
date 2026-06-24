@@ -1149,11 +1149,23 @@ with tab_perf:
         _cov = []
         for _cpp, _clbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
             _csub = _log[_log["prop"].astype(str).str.upper() == _cpp] if (_log is not None and not _log.empty) else _log
+            _ctot = int(len(_csub)) if (_csub is not None and not _csub.empty) else 0
             _cgr = int(_csub["graded"].astype(str).isin(["1", "1.0", "True"]).sum()) if (_csub is not None and not _csub.empty) else 0
             _cps, _ = T.paper_sim(_csub, odds=int(_po), only_plus_ev=False, odds_lookup=_olu, real_only=True)
-            _cov.append({"Prop": _clbl, "Graded in log": _cgr, "Priced (real odds)": _cps.get("n", 0)})
+            _cov.append({"Prop": _clbl, "In log": _ctot, "Graded": _cgr, "Priced (real odds)": _cps.get("n", 0)})
         st.caption("Coverage — graded projections logged vs how many you've priced (paper uses priced ones):")
         st.dataframe(pd.DataFrame(_cov), hide_index=True, use_container_width=True)
+        if st.button("↻ Refresh from sheet", key="paper_refresh"):
+            _invalidate_tracker_cache()
+            st.rerun()
+        if _log is not None and not _log.empty:
+            _allvc = (_log["prop"].astype(str).str.upper().replace("", "(blank)").value_counts().to_dict())
+            _gdf = _log[_log["graded"].astype(str).isin(["1", "1.0", "True"])]
+            _gvc = (_gdf["prop"].astype(str).str.upper().replace("", "(blank)").value_counts().to_dict()) if not _gdf.empty else {}
+            st.caption(f"Diagnostic — all rows by prop: {_allvc} · graded by prop: {_gvc} · "
+                       f"total rows {len(_log)}, graded {len(_gdf)}")
+        else:
+            st.caption("Diagnostic: the projection log (projections worksheet) reads as empty in this session.")
         if _psum.get("n"):
             _q1, _q2, _q3, _q4 = st.columns(4)
             _q1.metric("Paper bets", _psum["n"])
