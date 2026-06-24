@@ -187,6 +187,15 @@ def grade_diagnostic(season: int) -> dict:
         c["GRADEABLE_now"] += 1; cp[f"{prop}:gradeable"] += 1
     out = dict(c)
     out["_by_prop"] = dict(cp)
+    # date distribution of ALL ungraded rows (normalized) + today for reference
+    ud = Counter()
+    for _, row in log.iterrows():
+        if str(row.get("graded")) in ("1", "1.0", "True"):
+            continue
+        ud[_iso(row["date"])] += 1
+    out["_ungraded_by_date"] = dict(sorted(ud.items()))
+    out["_today"] = today
+    out["_total_rows"] = int(len(log))
     return out
 
 
