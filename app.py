@@ -1116,12 +1116,28 @@ with tab_perf:
         st.caption("Hypothetical flat 1-unit bankroll betting the model's lean on EVERY graded "
                    "projection at one assumed price — uses your full sample, not just real bets. "
                    "'vs break-even' = hit rate vs implied.")
-        _pc1, _pc2 = st.columns(2)
+        _avg_odds = T.avg_realized_odds(_bets)
+        _default_odds = int(_avg_odds) if _avg_odds is not None else -110
+        if _avg_odds is not None:
+            st.caption(f"Your average realized price is **{_avg_odds:+d}** — using it as the default so "
+                       "you're testing whether the model beats the price you actually get.")
+        _olu = {}
+        try:
+            for (_d, _pr, _gm, _bt), _rec in T.read_odds().items():
+                _olu[(T._iso(_d), str(_pr).upper(), str(_bt).strip())] = _rec
+        except Exception:
+            _olu = {}
+        _pc1, _pc2, _pc3 = st.columns(3)
         with _pc1:
-            _po = st.number_input("Assumed odds (American)", -400, 400, -110, step=5, key="paper_odds")
+            _po = st.number_input("Fallback odds (American)", -400, 400, _default_odds, step=5, key="paper_odds",
+                                  help="Used for picks you never entered odds on. Defaults to your average realized price.")
         with _pc2:
-            _pev = st.checkbox("Only picks that beat this price (+EV)", value=True, key="paper_ev")
-        _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev)
+            _pev = st.checkbox("Only +EV picks", value=True, key="paper_ev")
+        with _pc3:
+            _use_real = st.checkbox("Use my entered odds", value=True, key="paper_real",
+                                    help="Use the real price you entered per pick (from the odds sheet); fall back to the price at left where none was entered.")
+        _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
+                                     odds_lookup=(_olu if _use_real else None))
         if _psum.get("n"):
             _q1, _q2, _q3, _q4 = st.columns(4)
             _q1.metric("Paper bets", _psum["n"])
@@ -1129,13 +1145,17 @@ with tab_perf:
                        f"{(_psum['hit_rate'] - _psum['breakeven'])*100:+.1f} vs break-even")
             _q3.metric("ROI", f"{_psum['roi']*100:+.1f}%")
             _q4.metric("Units P/L", f"{_psum['profit']:+.1f}u")
+            if _use_real:
+                st.caption(f"{_psum.get('n_real', 0)} of {_psum['n']} picks used your real entered odds; "
+                           f"the rest used {int(_po):+d}.")
             if not _pcurve.empty:
                 st.line_chart(_pcurve.set_index("n")["bankroll"], height=240,
                               x_label="paper bets", y_label="units")
             _pp_rows = []
             for _pp, _lbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
                 _sub = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
-                _s, _ = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev)
+                _s, _ = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
+                                    odds_lookup=(_olu if _use_real else None))
                 if _s.get("n"):
                     _pp_rows.append({"Prop": _lbl, "Bets": _s["n"],
                                      "Hit%": round(_s["hit_rate"]*100, 1),
@@ -1144,8 +1164,8 @@ with tab_perf:
                                      "Units": round(_s["profit"], 1)})
             if _pp_rows:
                 st.dataframe(pd.DataFrame(_pp_rows), hide_index=True, use_container_width=True)
-            st.caption("Standardized to one price, so it measures raw directional edge vs the juice — "
-                       "your real ROI can be higher with line-shopping/plus-money, or lower if you only beat soft numbers.")
+            st.caption("Uses your real entered odds where available (else the fallback price). Picks you never "
+                       "priced use the fallback, so coverage grows as you log more odds.")
         else:
             st.caption("No graded projections yet — log and grade some slates first.")
 

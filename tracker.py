@@ -556,17 +556,29 @@ def reset_grades():
         write_bets(bets)
 
 
-def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0):
-    """Hypothetical FLAT 1-unit bankroll that bets the model's lean on EVERY graded
-    projection at a fixed assumed price. Standardizes everything to one price so you
-    can verify directional edge at full sample size (not just your real bets).
+def avg_realized_odds(bets):
+    """Average price you actually got, computed in implied-probability space (robust to
+    longshots), returned as American odds. None if no priced bets."""
+    if bets is None or bets.empty:
+        return None
+    decs = [_american_to_decimal(o) for o in bets.get("odds", [])]
+    decs = [d for d in decs if d]
+    if not decs:
+        return None
+    avg_p = sum(1.0 / d for d in decs) / len(decs)
+    dec = 1.0 / avg_p
+    amer = round((dec - 1) * 100) if dec >= 2 else round(-100.0 / (dec - 1))
+    return int(amer)
 
-      odds         : assumed American price for every pick (e.g. -110).
-      only_plus_ev : if True, only bet picks whose confidence beats that price's
-                     break-even (i.e. the model thinks it beats the juice); else bet
-                     every lean.
-    Returns (summary_dict, curve_df). Summary has n, wins, hit_rate, breakeven, roi,
-    profit. hit_rate vs breakeven IS your 'hit rate vs implied'.
+
+def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=None):
+    """Hypothetical FLAT 1-unit bankroll betting the model's lean on every graded
+    projection. If `odds_lookup` is given ({(iso_date, PROP, batter): {over, under}}),
+    each pick uses the REAL price you entered for its leaned side; picks with no entered
+    price fall back to the assumed `odds`. Break-even (+EV filter) is per-pick when real.
+
+    Returns (summary, curve). Summary: n, wins, hit_rate, breakeven (avg), roi, profit,
+    n_real (how many used your real odds).
     """
     import pandas as pd
     empty = pd.DataFrame(columns=["n", "bankroll"])
@@ -578,25 +590,42 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0):
     g = g.dropna(subset=["p", "oh"])
     if g.empty:
         return {"n": 0}, empty
-    dec = _american_to_decimal(odds)
-    if not dec:
+    assumed = _american_to_decimal(odds)
+    if not assumed:
         return {"n": 0}, empty
-    profit_win = dec - 1.0
-    breakeven = 1.0 / dec
-    g["conf"] = g["p"].apply(lambda p: max(p, 1 - p))
-    g["win"] = ((g["p"] >= 0.5) == (g["oh"] > 0.5))
-    bet = g[g["conf"] >= breakeven] if only_plus_ev else g
-    n = len(bet)
-    if n == 0:
-        return {"n": 0, "breakeven": breakeven}, empty
-    wins = int(bet["win"].sum())
-    profit = wins * profit_win - (n - wins)
-    curve, bk = [], float(start_units)
-    for i, (_, r) in enumerate(bet.iterrows(), 1):
-        bk += profit_win if r["win"] else -1.0
+    i = wins = n_real = 0
+    profit = 0.0
+    bk = float(start_units)
+    be_sum = 0.0
+    curve = []
+    for _, r in g.iterrows():
+        p = float(r["p"]); oh = float(r["oh"])
+        conf = max(p, 1 - p); lean_over = p >= 0.5
+        dec = None
+        if odds_lookup:
+            key = (_iso(r.get("date")), str(r.get("prop", "")).upper(), str(r.get("batter", "")).strip())
+            rec = odds_lookup.get(key)
+            if rec:
+                dec = _american_to_decimal(rec.get("over") if lean_over else rec.get("under"))
+        used_real = dec is not None
+        if dec is None:
+            dec = assumed
+        be = 1.0 / dec
+        if only_plus_ev and conf < be:
+            continue
+        win = (lean_over) == (oh > 0.5)
+        i += 1
+        wins += 1 if win else 0
+        n_real += 1 if used_real else 0
+        be_sum += be
+        step = (dec - 1.0) if win else -1.0
+        profit += step
+        bk += step
         curve.append({"n": i, "bankroll": round(bk, 2)})
-    return ({"n": n, "wins": wins, "hit_rate": wins / n, "breakeven": breakeven,
-             "roi": profit / n, "profit": profit, "odds": odds},
+    if i == 0:
+        return {"n": 0, "breakeven": 1.0 / assumed}, empty
+    return ({"n": i, "wins": wins, "hit_rate": wins / i, "breakeven": be_sum / i,
+             "roi": profit / i, "profit": profit, "n_real": n_real, "odds": odds},
             pd.DataFrame(curve))
 
 
