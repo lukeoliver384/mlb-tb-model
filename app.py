@@ -1136,15 +1136,27 @@ with tab_perf:
         with _pc3:
             _use_real = st.checkbox("Use my entered odds", value=True, key="paper_real",
                                     help="Use the real price you entered per pick (from the odds sheet); fall back to the price at left where none was entered.")
+        _real_only = st.checkbox("Grade only picks I have odds for (skip fallback)", value=True, key="paper_realonly",
+                                 disabled=not _use_real,
+                                 help="Truest paper bankroll of your actual candidates — excludes picks you never priced instead of pricing them at the fallback.")
+        _stake_mode = st.radio("Stake", ["Flat 1u (measures edge)", "Kelly (realistic growth)"],
+                               horizontal=True, key="paper_stake")
+        _sm = "kelly" if _stake_mode.startswith("Kelly") else "flat"
         _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
-                                     odds_lookup=(_olu if _use_real else None))
+                                     odds_lookup=(_olu if _use_real else None),
+                                     real_only=(_use_real and _real_only),
+                                     stake_mode=_sm, kelly_mult=float(kelly_mult))
         if _psum.get("n"):
             _q1, _q2, _q3, _q4 = st.columns(4)
             _q1.metric("Paper bets", _psum["n"])
             _q2.metric("Hit rate", f"{_psum['hit_rate']*100:.1f}%",
                        f"{(_psum['hit_rate'] - _psum['breakeven'])*100:+.1f} vs break-even")
             _q3.metric("ROI", f"{_psum['roi']*100:+.1f}%")
-            _q4.metric("Units P/L", f"{_psum['profit']:+.1f}u")
+            if _sm == "kelly":
+                _q4.metric("Growth", f"{_psum.get('growth', 0)*100:+.1f}%",
+                           help=f"Compounding from 100u to {_psum.get('final', 0):.1f}u at {kelly_mult:g}x Kelly")
+            else:
+                _q4.metric("Units P/L", f"{_psum['profit']:+.1f}u")
             if _use_real:
                 st.caption(f"{_psum.get('n_real', 0)} of {_psum['n']} picks used your real entered odds; "
                            f"the rest used {int(_po):+d}.")
@@ -1156,7 +1168,9 @@ with tab_perf:
             for _pp, _lbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
                 _sub = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
                 _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
-                                      odds_lookup=(_olu if _use_real else None))
+                                      odds_lookup=(_olu if _use_real else None),
+                                      real_only=(_use_real and _real_only),
+                                      stake_mode=_sm, kelly_mult=float(kelly_mult))
                 if _s.get("n"):
                     _pp_rows.append({"Prop": _lbl, "Bets": _s["n"],
                                      "Hit%": round(_s["hit_rate"]*100, 1),
