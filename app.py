@@ -1152,18 +1152,27 @@ with tab_perf:
                 st.line_chart(_pcurve.set_index("n")["bankroll"], height=240,
                               x_label="paper bets", y_label="units")
             _pp_rows = []
+            _pp_curves = []
             for _pp, _lbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
                 _sub = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
-                _s, _ = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
-                                    odds_lookup=(_olu if _use_real else None))
+                _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
+                                      odds_lookup=(_olu if _use_real else None))
                 if _s.get("n"):
                     _pp_rows.append({"Prop": _lbl, "Bets": _s["n"],
                                      "Hit%": round(_s["hit_rate"]*100, 1),
                                      "Break-even%": round(_s["breakeven"]*100, 1),
                                      "ROI%": round(_s["roi"]*100, 1),
                                      "Units": round(_s["profit"], 1)})
+                    if not _sc.empty:
+                        _pp_curves.append((_lbl, _s, _sc))
             if _pp_rows:
+                st.markdown("**By prop**")
                 st.dataframe(pd.DataFrame(_pp_rows), hide_index=True, use_container_width=True)
+            for _lbl, _s, _sc in _pp_curves:
+                st.caption(f"{_lbl} — paper bankroll  ·  {_s['n']} bets, "
+                           f"{_s['hit_rate']*100:.1f}% hit, ROI {_s['roi']*100:+.1f}%")
+                st.line_chart(_sc.set_index("n")["bankroll"], height=200,
+                              x_label="paper bets", y_label="units")
             st.caption("Uses your real entered odds where available (else the fallback price). Picks you never "
                        "priced use the fallback, so coverage grows as you log more odds.")
         else:
