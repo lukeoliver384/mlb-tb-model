@@ -255,6 +255,7 @@ with colA:
 if go:
     try:
         st.session_state["slate"] = load(date.isoformat(), int(season), use_recent, int(recent_days), use_weather)
+        st.session_state["slate_date"] = date.isoformat()
         st.session_state["savant"] = load_savant(int(season)) if use_statcast else ({}, {})
         st.session_state["arsenal"] = load_arsenal(int(season)) if use_arsenal else ({}, {})
         st.session_state["whiff"] = load_whiff(int(season)) if use_kwhiff else {}
@@ -1088,7 +1089,8 @@ with tab_perf:
     with tc1:
         if st.button("Log projections", help="Logs all props (TB + H+R+RBI + priced Ks) for the loaded slate."):
             try:
-                n = _log_all_props(slate, date.isoformat())
+                _slate_date = st.session_state.get("slate_date", date.isoformat())
+                n = _log_all_props(slate, _slate_date)
                 _invalidate_tracker_cache()
                 st.success(f"Logged {n} projections (all props) for {date.isoformat()}.")
             except Exception as ex:
@@ -1108,6 +1110,43 @@ with tab_perf:
                 st.json(_gd)
             except Exception as ex:
                 st.error(f"Diagnostic failed: {ex}")
+
+    with st.expander("Backfill past dates (recompute + log + grade all props)"):
+        st.caption("Reconstructs projections for past dates so prior priced picks land in the tracker. "
+                   "Re-runs the model once per day (slow — an API pull each), logs TB + H+R+RBI + priced Ks, "
+                   "then grades. Your existing odds attach automatically once the projection rows exist.")
+        _bfc1, _bfc2 = st.columns(2)
+        with _bfc1:
+            _bf_start = st.date_input("From", date - dt.timedelta(days=7), key="bf_start")
+        with _bfc2:
+            _bf_end = st.date_input("To", date, key="bf_end")
+        if st.button("Run backfill"):
+            _days = (_bf_end - _bf_start).days + 1
+            if _days < 1:
+                st.error("End date must be on or after start date.")
+            elif _days > 45:
+                st.error("Range too large (max 45 days at a time) — run it in chunks.")
+            else:
+                _prog = st.progress(0.0, text="Backfilling…")
+                _tot = 0
+                for _k in range(_days):
+                    _d = _bf_start + dt.timedelta(days=_k)
+                    _di = _d.isoformat()
+                    try:
+                        _sl = load(_di, int(season), use_recent, int(recent_days), use_weather)
+                        if _sl:
+                            _tot += _log_all_props(_sl, _di)
+                    except Exception:
+                        pass
+                    _prog.progress((_k + 1) / _days, text=f"Backfilling… {_di}")
+                try:
+                    _ng = T.grade(int(season))
+                    _nb = T.grade_bets(int(season))
+                except Exception:
+                    _ng = _nb = 0
+                _invalidate_tracker_cache()
+                st.success(f"Backfill complete: logged {_tot} projections over {_days} day(s), "
+                           f"graded {_ng} projections and {_nb} bets.")
 
     with st.expander("Closing lines & CLV — enter the close for your bets"):
         st.caption("For each bet, enter the closing price of the side you took (American, e.g. -110). "
