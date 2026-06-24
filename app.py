@@ -1102,6 +1102,12 @@ with tab_perf:
                 st.success(f"Graded {n} projections and {nb} bets.")
             except Exception as ex:
                 st.error(f"Grade failed: {ex}")
+        if st.button("Diagnose grading", help="Shows why ungraded rows aren't grading (date not final, missing id, no result found, etc.)."):
+            try:
+                _gd = T.grade_diagnostic(int(season))
+                st.json(_gd)
+            except Exception as ex:
+                st.error(f"Diagnostic failed: {ex}")
 
     with st.expander("Closing lines & CLV — enter the close for your bets"):
         st.caption("For each bet, enter the closing price of the side you took (American, e.g. -110). "

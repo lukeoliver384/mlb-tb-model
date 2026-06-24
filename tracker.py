@@ -141,6 +141,55 @@ def log_projections(proj_df: pd.DataFrame, date_str: str,
     return len(new)
 
 
+def grade_diagnostic(season: int) -> dict:
+    """Walk every UNGRADED row and tally why it would/wouldn't grade right now.
+    Helps diagnose '0 graded' issues. Returns a dict of reason -> count (per prop too)."""
+    from collections import Counter
+    log = read_log()
+    if log is None or log.empty:
+        return {"(log empty)": 0}
+    today = dt.date.today().isoformat()
+    c = Counter()
+    cp = Counter()
+    finals = {}
+    for _, row in log.iterrows():
+        if str(row.get("graded")) in ("1", "1.0", "True"):
+            continue
+        prop = str(row.get("prop") or "TB").upper() or "(blank)"
+        d = _iso(row["date"])
+        if d > today:
+            c["future_date"] += 1; continue
+        if d == today:
+            if d not in finals:
+                try:
+                    finals[d] = D.final_venues(d)
+                except Exception:
+                    finals[d] = set()
+            if str(row.get("venue", "")).strip() not in finals[d]:
+                c["today_not_final"] += 1; continue
+        try:
+            bid = int(row["batter_id"])
+        except (ValueError, TypeError):
+            bid = 0
+        if not bid:
+            c["no_batter_id"] += 1; cp[f"{prop}:no_batter_id"] += 1; continue
+        fn2 = D.player_hrr_on_date if prop == "HRR" else (D.player_k_on_date if prop == "K" else D.player_tb_on_date)
+        try:
+            actual = fn2(bid, season, d)
+        except Exception:
+            c["fetch_error"] += 1; cp[f"{prop}:fetch_error"] += 1; continue
+        if actual is None:
+            c["no_result_found"] += 1; cp[f"{prop}:no_result_found"] += 1; continue
+        try:
+            float(row["line"])
+        except (ValueError, TypeError):
+            c["bad_or_blank_line"] += 1; cp[f"{prop}:bad_line"] += 1; continue
+        c["GRADEABLE_now"] += 1; cp[f"{prop}:gradeable"] += 1
+    out = dict(c)
+    out["_by_prop"] = dict(cp)
+    return out
+
+
 def grade(season: int) -> int:
     """Fill actual result for ungraded rows whose game date has passed (prop-aware)."""
     log = read_log()
