@@ -169,10 +169,15 @@ def grade(season: int) -> int:
             continue
         prop = str(row.get("prop") or "TB").upper()
         fn = D.player_hrr_on_date if prop == "HRR" else (D.player_k_on_date if prop == "K" else D.player_tb_on_date)
-        actual = fn(bid, season, d)
-        if actual is None:
+        try:
+            actual = fn(bid, season, d)
+            if actual is None:
+                continue
+            ln = float(row["line"])           # blank/None line -> skip this row, not the whole run
+        except (ValueError, TypeError):
             continue
-        ln = float(row["line"])
+        except Exception:
+            continue
         a_side = "Over" if actual > ln else "Under"
         pred = str(row.get("pred_side") or "")
         if pred not in ("Over", "Under"):
