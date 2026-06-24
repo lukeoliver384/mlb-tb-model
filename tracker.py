@@ -35,7 +35,7 @@ def _iso(x):
         return str(x)
 
 BET_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "side", "prop",
-               "odds", "stake", "actual", "result", "profit", "graded"]
+               "odds", "stake", "actual", "result", "profit", "close_odds", "graded"]
 BET_CSV = "tracker_bets.csv"
 
 ODDS_COLUMNS = ["date", "prop", "game", "batter", "line", "over", "under"]
@@ -332,6 +332,7 @@ def log_bets(bets_df: pd.DataFrame) -> int:
     existing = read_bets()
     out = new if existing.empty else pd.concat([existing, new], ignore_index=True)
     out = out.drop_duplicates(subset=["date", "batter", "side", "odds", "stake"], keep="last")
+    out = out.reindex(columns=BET_COLUMNS)
     write_bets(out)
     return len(new)
 
@@ -384,6 +385,35 @@ def grade_bets(season: int) -> int:
     if n:
         write_bets(bets)
     return n
+
+
+def _american_to_decimal(a):
+    try:
+        v = float(str(a).replace("+", "").strip())
+    except (TypeError, ValueError):
+        return None
+    if v == 0:
+        return None
+    return 1 + v / 100.0 if v > 0 else 1 + 100.0 / abs(v)
+
+
+def clv_metrics(bets: pd.DataFrame) -> dict:
+    """CLV per bet from the price you took vs the closing price of that side:
+    CLV% = entry_decimal / closing_decimal - 1 (positive = you beat the close).
+    Only bets with a closing price entered are counted."""
+    if bets is None or bets.empty:
+        return {"n": 0, "avg_clv": 0.0, "pos_rate": 0.0}
+    clvs = []
+    for _, r in bets.iterrows():
+        ed = _american_to_decimal(r.get("odds"))
+        cd = _american_to_decimal(r.get("close_odds"))
+        if ed and cd:
+            clvs.append(ed / cd - 1.0)
+    if not clvs:
+        return {"n": 0, "avg_clv": 0.0, "pos_rate": 0.0}
+    return {"n": len(clvs),
+            "avg_clv": sum(clvs) / len(clvs),
+            "pos_rate": sum(1 for x in clvs if x > 0) / len(clvs)}
 
 
 def bet_metrics(bets: pd.DataFrame) -> dict:

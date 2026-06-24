@@ -85,7 +85,7 @@ _seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
 _seed("ui_regk", int(E.REG_K_PA))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
-_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5)
+_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5); _seed("ui_caltemp", 1.0)
 _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
 _seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
 _seed("ui_statcast", True); _seed("ui_wstatcast", 0.5); _seed("ui_arsenal", False)
@@ -131,8 +131,10 @@ with st.sidebar:
         use_components = st.checkbox("Per-event log5 (advanced)", key="ui_components")
         method = st.radio("Cover-probability method",
                           ["Exact distribution (recommended)", "Poisson (sheet original)"], key="ui_method")
-        use_calibration = st.checkbox("Apply calibration correction", key="ui_calib",
-                                      help="Re-scales probabilities from graded results. No-op until enough data.")
+        use_calibration = st.checkbox("Apply calibration correction (auto, data-driven)", key="ui_calib",
+                                      help="Fits a temperature from graded results. Heavily regularized — barely moves until ~200 graded legs.")
+        cal_temp = st.slider("Manual confidence compression", 1.0, 2.5, step=0.05, key="ui_caltemp",
+                             help="Pulls probabilities toward 50% to fix overconfidence (>1 = more compression; leaves 50% unchanged, bites hardest at the extremes). Set from the confidence-vs-actual table. Stacks with auto.")
         hrr_disp = st.slider("H+R+RBI variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_hrrdisp",
                              help="Overdispersion for H+R+RBI. 1.0 = Poisson (most confident); higher spreads probabilities toward 50%. Tune via the confidence-vs-actual tracker.")
         k_disp = st.slider("Strikeouts variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_kdisp",
@@ -171,7 +173,7 @@ with st.sidebar:
 
 # Persist sidebar settings (one write only when something changed)
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
-           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx",
+           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_caltemp",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
            "ui_kwhiff", "ui_wkwhiff"]
@@ -288,16 +290,23 @@ try:
     T_cal, T_caln = T.calibration_temperature(_log_cached()) if use_calibration else (1.0, 0)
 except Exception:
     T_cal, T_caln = 1.0, 0
+T_total = float(T_cal) * float(cal_temp)
 
 def _calibrate(p):
-    if not use_calibration or T_cal == 1.0 or not (0 < p < 1):
+    if T_total == 1.0 or not (0 < p < 1):
         return p
-    lp = math.log(p / (1 - p)) / T_cal
+    lp = math.log(p / (1 - p)) / T_total
     return 1.0 / (1.0 + math.exp(-lp))
 
-if use_calibration:
-    st.caption(f"Calibration on: temperature {T_cal} from {T_caln} graded legs "
-               f"({'compressing — model was overconfident' if T_cal > 1 else ('expanding — underconfident' if T_cal < 1 else 'no change yet')}).")
+if T_total != 1.0:
+    _src = []
+    if use_calibration and T_cal != 1.0:
+        _src.append(f"auto {T_cal} ({T_caln} legs)")
+    if float(cal_temp) != 1.0:
+        _src.append(f"manual {cal_temp}")
+    st.caption(f"Confidence compression active — effective temperature {round(T_total, 3)}"
+               + (f" [{' × '.join(_src)}]" if _src else "")
+               + ". >1 pulls probabilities toward 50% (fixes overconfidence).")
 
 # Dynamic bankroll: realized P&L so far updates the current bankroll used for sizing.
 _bets = _bets_cached()
@@ -1063,6 +1072,44 @@ with tab_perf:
                 st.success(f"Reset + re-graded {n} projections and {nb} bets.")
             except Exception as ex:
                 st.error(f"Re-grade failed: {ex}")
+
+    with st.expander("Closing lines & CLV — enter the close for your bets"):
+        st.caption("For each bet, enter the closing price of the side you took (American, e.g. -110). "
+                   "CLV = how your price compares to the close; beating the close consistently is the "
+                   "strongest evidence your edge is real, independent of wins/losses.")
+        _cb = _bets.copy()
+        if _cb.empty:
+            st.caption("No bets logged yet.")
+        else:
+            _cb = _cb.reset_index(drop=True)
+            if "close_odds" not in _cb.columns:
+                _cb["close_odds"] = ""
+            _cv = _cb[["date", "batter", "prop", "side", "line", "odds", "close_odds"]].copy()
+            _cv["close_odds"] = _cv["close_odds"].fillna("").astype(str).replace("nan", "")
+            _ced = st.data_editor(
+                _cv, key="clv_editor", hide_index=True, use_container_width=True,
+                disabled=["date", "batter", "prop", "side", "line", "odds"],
+                column_config={"close_odds": st.column_config.TextColumn(
+                    "Closing odds", help="American odds at/near close for the side you bet, e.g. -110")})
+            if st.button("Save closing odds"):
+                _cb["close_odds"] = _ced["close_odds"].values
+                try:
+                    T.write_bets(_cb)
+                    _invalidate_tracker_cache()
+                    st.success("Saved closing odds.")
+                    st.rerun()
+                except Exception as ex:
+                    st.warning(f"Save failed: {ex}")
+            _cm = T.clv_metrics(_cb)
+            if _cm and _cm["n"]:
+                cl1, cl2, cl3 = st.columns(3)
+                cl1.metric("Bets with close", _cm["n"])
+                cl2.metric("Avg CLV", f"{_cm['avg_clv']*100:+.1f}%",
+                           help="Average % your price beat the closing price. Positive = good.")
+                cl3.metric("Positive-CLV rate", f"{_cm['pos_rate']*100:.0f}%",
+                           help="Share of bets that beat the close. Aim well above 50%.")
+            else:
+                st.caption("Enter closing odds above to see CLV metrics.")
 
 
     def _prop_view(plog, pbets, label):
