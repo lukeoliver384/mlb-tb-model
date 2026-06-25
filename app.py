@@ -1156,6 +1156,67 @@ with tab_perf:
                 st.success(f"Backfill complete: logged {_tot} projections over {_days} day(s), "
                            f"graded {_ng} projections and {_nb} bets.")
 
+    def _prop_view(plog, pbets, label):
+        _m = T.metrics(plog)
+        if _m:
+            g1, g2, g3, g4 = st.columns(4)
+            g1.metric("Graded", _m["n"])
+            g2.metric("Avg error", f"{_m['mae']:.2f}")
+            g3.metric("Bias (proj − actual)", f"{_m['bias']:+.2f}",
+                      help="Positive = model projects too high on average")
+            g4.metric("Prediction accuracy",
+                      f"{_m['pred_acc']*100:.0f}%" if _m.get("pred_acc") is not None else "—",
+                      help="How often the projection's over/under call (proj vs the line) matched the actual result.")
+            pb = T.prediction_breakdown(plog)
+            if not pb.empty:
+                st.caption("Prediction accuracy — projection's over/under call vs actual")
+                st.dataframe(pb, use_container_width=True, hide_index=True,
+                             column_config={
+                                 "Prediction": "Model called",
+                                 "Correct": st.column_config.NumberColumn("Correct", format="%d%%")})
+            cc = T.calibration_by_confidence(plog)
+            if not cc.empty:
+                with st.expander("Confidence vs actual hit rate"):
+                    ccd = cc.copy()
+                    ccd["confidence"] = (ccd["confidence"] * 100).round(0)
+                    ccd["hit_rate"] = (ccd["hit_rate"] * 100).round(0)
+                    ccd["gap"] = (ccd["gap"] * 100).round(0)
+                    st.dataframe(ccd, use_container_width=True, hide_index=True,
+                                 column_config={
+                                     "bucket": "Confidence",
+                                     "n": "Picks",
+                                     "confidence": st.column_config.NumberColumn("Avg conf", format="%d%%"),
+                                     "hit_rate": st.column_config.NumberColumn("Actual hit", format="%d%%"),
+                                     "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
+            cp = T.calibration_by_probability(plog)
+            if not cp.empty:
+                with st.expander("Calibration by model probability — P(over)"):
+                    st.caption("Does a P(over) of X% actually go over ~X%? Full range, so the low "
+                               "buckets show your under calibration too.")
+                    cpd = cp.copy()
+                    cpd["predicted"] = (cpd["predicted"] * 100).round(0)
+                    cpd["over_rate"] = (cpd["over_rate"] * 100).round(0)
+                    cpd["gap"] = (cpd["gap"] * 100).round(0)
+                    st.dataframe(cpd, use_container_width=True, hide_index=True,
+                                 column_config={
+                                     "bucket": "P(over) bucket",
+                                     "n": "Picks",
+                                     "predicted": st.column_config.NumberColumn("Avg P(over)", format="%d%%"),
+                                     "over_rate": st.column_config.NumberColumn("Actual over %", format="%d%%"),
+                                     "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
+        else:
+            st.caption(f"No graded {label} projections yet.")
+        _bm = T.bet_metrics(pbets)
+        if _bm:
+            st.caption("Betting P&L — graded bets")
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Record", _bm["record"])
+            b2.metric("Win rate", f"{_bm['win_rate']*100:.0f}%")
+            b3.metric("$ P&L", f"${_bm['units_profit']:+,.2f}", help=f"{_bm['n']} bets, ${_bm['units_staked']:,.0f} staked")
+            b4.metric("ROI", f"{_bm['roi']*100:+.1f}%")
+        else:
+            st.caption(f"No graded {label} bets yet.")
+
     _tabs = st.tabs(["Total Bases", "Hits + Runs + RBIs"])
     for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
         with _tab:
@@ -1291,67 +1352,6 @@ with tab_paper:
                        "priced use the fallback, so coverage grows as you log more odds.")
         else:
             st.caption("No graded projections yet — log and grade some slates first.")
-
-    def _prop_view(plog, pbets, label):
-        _m = T.metrics(plog)
-        if _m:
-            g1, g2, g3, g4 = st.columns(4)
-            g1.metric("Graded", _m["n"])
-            g2.metric("Avg error", f"{_m['mae']:.2f}")
-            g3.metric("Bias (proj − actual)", f"{_m['bias']:+.2f}",
-                      help="Positive = model projects too high on average")
-            g4.metric("Prediction accuracy",
-                      f"{_m['pred_acc']*100:.0f}%" if _m.get("pred_acc") is not None else "—",
-                      help="How often the projection's over/under call (proj vs the line) matched the actual result.")
-            pb = T.prediction_breakdown(plog)
-            if not pb.empty:
-                st.caption("Prediction accuracy — projection's over/under call vs actual")
-                st.dataframe(pb, use_container_width=True, hide_index=True,
-                             column_config={
-                                 "Prediction": "Model called",
-                                 "Correct": st.column_config.NumberColumn("Correct", format="%d%%")})
-            cc = T.calibration_by_confidence(plog)
-            if not cc.empty:
-                with st.expander("Confidence vs actual hit rate"):
-                    ccd = cc.copy()
-                    ccd["confidence"] = (ccd["confidence"] * 100).round(0)
-                    ccd["hit_rate"] = (ccd["hit_rate"] * 100).round(0)
-                    ccd["gap"] = (ccd["gap"] * 100).round(0)
-                    st.dataframe(ccd, use_container_width=True, hide_index=True,
-                                 column_config={
-                                     "bucket": "Confidence",
-                                     "n": "Picks",
-                                     "confidence": st.column_config.NumberColumn("Avg conf", format="%d%%"),
-                                     "hit_rate": st.column_config.NumberColumn("Actual hit", format="%d%%"),
-                                     "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
-            cp = T.calibration_by_probability(plog)
-            if not cp.empty:
-                with st.expander("Calibration by model probability — P(over)"):
-                    st.caption("Does a P(over) of X% actually go over ~X%? Full range, so the low "
-                               "buckets show your under calibration too.")
-                    cpd = cp.copy()
-                    cpd["predicted"] = (cpd["predicted"] * 100).round(0)
-                    cpd["over_rate"] = (cpd["over_rate"] * 100).round(0)
-                    cpd["gap"] = (cpd["gap"] * 100).round(0)
-                    st.dataframe(cpd, use_container_width=True, hide_index=True,
-                                 column_config={
-                                     "bucket": "P(over) bucket",
-                                     "n": "Picks",
-                                     "predicted": st.column_config.NumberColumn("Avg P(over)", format="%d%%"),
-                                     "over_rate": st.column_config.NumberColumn("Actual over %", format="%d%%"),
-                                     "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
-        else:
-            st.caption(f"No graded {label} projections yet.")
-        _bm = T.bet_metrics(pbets)
-        if _bm:
-            st.caption("Betting P&L — graded bets")
-            b1, b2, b3, b4 = st.columns(4)
-            b1.metric("Record", _bm["record"])
-            b2.metric("Win rate", f"{_bm['win_rate']*100:.0f}%")
-            b3.metric("$ P&L", f"${_bm['units_profit']:+,.2f}", help=f"{_bm['n']} bets, ${_bm['units_staked']:,.0f} staked")
-            b4.metric("ROI", f"{_bm['roi']*100:+.1f}%")
-        else:
-            st.caption(f"No graded {label} bets yet.")
 
 
 with tab_clv:
