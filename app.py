@@ -1219,7 +1219,7 @@ with tab_perf:
         _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
                                      odds_lookup=(_olu if _use_real else None),
                                      real_only=(_use_real and _real_only),
-                                     stake_mode=_sm, kelly_mult=float(kelly_mult))
+                                     stake_mode=_sm, kelly_mult=float(kelly_mult), temp=float(T_total))
         _cov = []
         for _cpp, _clbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
             _csub = _log[_log["prop"].astype(str).str.upper() == _cpp] if (_log is not None and not _log.empty) else _log
@@ -1264,7 +1264,7 @@ with tab_perf:
                 _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
                                       odds_lookup=(_olu if _use_real else None),
                                       real_only=(_use_real and _real_only),
-                                      stake_mode=_sm, kelly_mult=float(kelly_mult))
+                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp=float(T_total))
                 if _s.get("n"):
                     _pp_rows.append({"Prop": _lbl, "Bets": _s["n"],
                                      "Hit%": round(_s["hit_rate"]*100, 1),

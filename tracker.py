@@ -682,7 +682,7 @@ def avg_realized_odds(bets):
 
 
 def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=None,
-              real_only=False, stake_mode="flat", kelly_mult=0.25, max_frac=0.10):
+              real_only=False, stake_mode="flat", kelly_mult=0.25, max_frac=0.10, temp=1.0):
     """Hypothetical paper bankroll betting the model's lean on graded projections.
 
       odds_lookup : {(iso_date, PROP, batter): {over, under}} -> use your REAL entered
@@ -730,8 +730,13 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
             continue
         win = (lean_over) == (oh > 0.5)
         if stake_mode == "kelly":
+            conf_k = conf
+            if temp and temp != 1.0 and 0 < p < 1:
+                import math as _m
+                _pc = 1.0 / (1.0 + _m.exp(-(_m.log(p / (1 - p)) / temp)))
+                conf_k = max(_pc, 1 - _pc)   # calibrated confidence -> realistic stake
             b = dec - 1.0
-            f = ((b * conf - (1 - conf)) / b) if b > 0 else 0.0
+            f = ((b * conf_k - (1 - conf_k)) / b) if b > 0 else 0.0
             f = min(max(0.0, f) * kelly_mult, max_frac)
             stake = f * bk
         else:
