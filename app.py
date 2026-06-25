@@ -85,7 +85,7 @@ _seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
 _seed("ui_regk", int(E.REG_K_PA))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
-_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5); _seed("ui_caltemp", 1.5); _seed("ui_autocal", False)
+_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5); _seed("ui_tbtemp", 1.5); _seed("ui_hrrtemp", 2.0); _seed("ui_ktemp", 1.4); _seed("ui_autocal", False)
 _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
 _seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
 _seed("ui_statcast", True); _seed("ui_wstatcast", 0.5); _seed("ui_arsenal", False)
@@ -129,15 +129,18 @@ with st.sidebar:
         use_splits = st.checkbox("Use L/R handedness splits", key="ui_splits")
         use_homeaway = st.checkbox("Home/away splits (regressed)", key="ui_homeaway")
         use_components = st.checkbox("Per-event log5 (advanced)", key="ui_components")
-        method = st.radio("Cover-probability method",
-                          ["Exact distribution (recommended)", "Poisson (sheet original)"], key="ui_method")
         use_calibration = st.checkbox("Apply confidence compression", key="ui_calib",
                                       help="Master on/off. Pulls probabilities toward 50% to fix overconfidence. Off = raw model probabilities.")
         auto_cal = st.checkbox("Auto-fit temperature from graded data", key="ui_autocal", disabled=not use_calibration,
                                help="Fit the temperature from results instead of setting it by hand.")
-        cal_temp = st.slider("Compression temperature", 1.0, 5.0, step=0.05, key="ui_caltemp",
-                             disabled=(not use_calibration) or auto_cal,
-                             help="Higher = more compression toward 50% (1.0 = none). Set from the confidence-vs-actual table.")
+        st.caption("Per-prop compression temperature (1.0 = none; higher pulls toward 50%):")
+        tb_temp = st.slider("TB temperature", 1.0, 5.0, step=0.05, key="ui_tbtemp",
+                            disabled=(not use_calibration) or auto_cal)
+        hrr_temp = st.slider("H+R+RBI temperature", 1.0, 5.0, step=0.05, key="ui_hrrtemp",
+                             disabled=(not use_calibration) or auto_cal)
+        k_temp = st.slider("Ks temperature", 1.0, 5.0, step=0.05, key="ui_ktemp",
+                           disabled=(not use_calibration) or auto_cal)
+        TEMPS = {"TB": tb_temp, "HRR": hrr_temp, "K": k_temp}
         hrr_disp = st.slider("H+R+RBI variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_hrrdisp",
                              help="Overdispersion for H+R+RBI. 1.0 = Poisson (most confident); higher spreads probabilities toward 50%. Tune via the confidence-vs-actual tracker.")
         k_disp = st.slider("Strikeouts variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_kdisp",
@@ -170,13 +173,9 @@ with st.sidebar:
                                  help="Blends a swinging-strike-implied K rate into the pitcher's K%. SwStr stabilizes faster than raw K% — most useful early season.")
         w_kwhiff = st.slider("Weight on SwStr-implied K", 0.0, 1.0, step=0.05, key="ui_wkwhiff", disabled=not use_kwhiff)
 
-    with st.expander("Fangraphs CSV (optional)", expanded=False):
-        st.caption("Overrides MLB-API batter TB/PA")
-        fg_csv = st.file_uploader("Fangraphs batting export (.csv)", type=["csv"])
-
 # Persist sidebar settings (one write only when something changed)
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
-           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_caltemp",
+           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_calib", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_tbtemp", "ui_hrrtemp", "ui_ktemp",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
            "ui_kwhiff", "ui_wkwhiff"]
@@ -187,7 +186,7 @@ if _newui != _ui_saved_raw:
     except Exception:
         pass
 
-fg_rates = D.load_fangraphs_csv(fg_csv) if fg_csv else {}
+fg_rates = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -297,10 +296,13 @@ if use_calibration and auto_cal:
     except Exception:
         T_cal, T_caln = 1.0, 0
     T_total = float(T_cal)
+    TEMP_MAP = {pp: float(T_cal) for pp in ("TB", "HRR", "K")}
 elif use_calibration:
-    T_total = float(cal_temp)
+    T_total = float(TEMPS.get(STAT, 1.0))
+    TEMP_MAP = {pp: float(TEMPS.get(pp, 1.0)) for pp in ("TB", "HRR", "K")}
 else:
     T_total = 1.0
+    TEMP_MAP = {pp: 1.0 for pp in ("TB", "HRR", "K")}
 
 def _calibrate(p):
     if T_total == 1.0 or not (0 < p < 1):
@@ -308,12 +310,12 @@ def _calibrate(p):
     lp = math.log(p / (1 - p)) / T_total
     return 1.0 / (1.0 + math.exp(-lp))
 
-if use_calibration and T_total != 1.0:
-    _msg = (f"auto {round(T_cal, 3)} from {T_caln} graded legs" if auto_cal else f"manual {cal_temp}")
-    st.caption(f"Confidence compression ON — temperature {round(T_total, 3)} [{_msg}]. "
-               ">1 pulls probabilities toward 50%.")
-elif use_calibration:
-    st.caption("Confidence compression ON but temperature is 1.0 (no effect) — raise the slider or check Auto-fit.")
+if use_calibration:
+    if auto_cal:
+        st.caption(f"Confidence compression: AUTO {round(T_cal, 3)} from {T_caln} graded legs (all props).")
+    else:
+        st.caption(f"Confidence compression (per prop): TB {tb_temp} · H+R+RBI {hrr_temp} · Ks {k_temp}. "
+                   f"Active for {STAT}: {round(T_total, 3)}. >1 pulls probabilities toward 50%.")
 
 # Dynamic bankroll: realized P&L so far updates the current bankroll used for sizing.
 _bets = _bets_cached()
@@ -500,7 +502,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
             park_event_mult=park_ev,
         )
         r = E.project(inp)
-        p_cover = r.p_cover if method.startswith("Exact") else r.p_cover_poisson
+        p_cover = r.p_cover
         p_cover = _calibrate(p_cover)
         rows.append({
             "Batter": b.name, "Slot": b.order, "B": b.bats,
@@ -649,7 +651,7 @@ st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
 # --------------------------------------------------------------------------- #
 # Summary + projections                                                       #
 # --------------------------------------------------------------------------- #
-tab_bet, tab_perf = st.tabs(["📊 Projections & Odds", "📈 Performance & Bankroll"])
+tab_bet, tab_perf, tab_paper, tab_clv = st.tabs(["📊 Projections & Odds", "📈 Performance", "💰 Paper Bankroll", "🎯 Closing Lines (CLV)"])
 
 with tab_bet:
     m1, m2, m3, m4 = st.columns(4)
@@ -1154,45 +1156,42 @@ with tab_perf:
                 st.success(f"Backfill complete: logged {_tot} projections over {_days} day(s), "
                            f"graded {_ng} projections and {_nb} bets.")
 
-    with st.expander("Closing lines & CLV — enter the close for your bets"):
-        st.caption("For each bet, enter the closing price of the side you took (American, e.g. -110). "
-                   "CLV = how your price compares to the close; beating the close consistently is the "
-                   "strongest evidence your edge is real, independent of wins/losses.")
-        _cb = _bets.copy()
-        if _cb.empty:
-            st.caption("No bets logged yet.")
-        else:
-            _cb = _cb.reset_index(drop=True)
-            if "close_odds" not in _cb.columns:
-                _cb["close_odds"] = ""
-            _cv = _cb[["date", "batter", "prop", "side", "line", "odds", "close_odds"]].copy()
-            _cv["close_odds"] = _cv["close_odds"].fillna("").astype(str).replace("nan", "")
-            _ced = st.data_editor(
-                _cv, key="clv_editor", hide_index=True, use_container_width=True,
-                disabled=["date", "batter", "prop", "side", "line", "odds"],
-                column_config={"close_odds": st.column_config.TextColumn(
-                    "Closing odds", help="American odds at/near close for the side you bet, e.g. -110")})
-            if st.button("Save closing odds"):
-                _cb["close_odds"] = _ced["close_odds"].values
-                try:
-                    T.write_bets(_cb)
-                    _invalidate_tracker_cache()
-                    st.success("Saved closing odds.")
-                    st.rerun()
-                except Exception as ex:
-                    st.warning(f"Save failed: {ex}")
-            _cm = T.clv_metrics(_cb)
-            if _cm and _cm["n"]:
-                cl1, cl2, cl3 = st.columns(3)
-                cl1.metric("Bets with close", _cm["n"])
-                cl2.metric("Avg CLV", f"{_cm['avg_clv']*100:+.1f}%",
-                           help="Average % your price beat the closing price. Positive = good.")
-                cl3.metric("Positive-CLV rate", f"{_cm['pos_rate']*100:.0f}%",
-                           help="Share of bets that beat the close. Aim well above 50%.")
-            else:
-                st.caption("Enter closing odds above to see CLV metrics.")
+    _tabs = st.tabs(["Total Bases", "Hits + Runs + RBIs"])
+    for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
+        with _tab:
+            _pl = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
+            _pb = _bets[_bets["prop"].astype(str).str.upper() == _pp] if not _bets.empty else _bets
+            _prop_view(_pl, _pb, _lbl)
+
+    _baseline = float(start_bk) - _realized
+    _allcurve = T.bankroll_curve(_bets, _baseline)
+    if not _allcurve.empty:
+        st.subheader("Bankroll — combined (all props)")
+        st.caption("Dollar ledger ending at your current balance — how you got here from logged bets across both props.")
+        _abs = T.bankroll_stats(_allcurve, _baseline)
+        _cc1, _cc2, _cc3 = st.columns(3)
+        _cc2.metric("Peak", f"${_abs['peak']:,.2f}")
+        _cc3.metric("Max drawdown", f"{_abs['max_drawdown_pct']:.1f}%")
+        st.line_chart(_allcurve.set_index("n")["bankroll"], height=260,
+                      x_label="settled bets", y_label="bankroll ($)")
+
+    with st.expander("Recent graded results (verify)"):
+        _isdone = lambda d: d["graded"].astype(str).isin(["1", "1.0", "True"])
+        _gl = _log[_isdone(_log)] if not _log.empty else _log
+        if _gl is not None and not _gl.empty:
+            st.caption("Projections graded vs actual")
+            st.dataframe(_gl[["date", "batter", "prop", "line", "proj", "actual", "over_hit"]].tail(40),
+                         use_container_width=True, hide_index=True)
+        _gb = _bets[_isdone(_bets)] if not _bets.empty else _bets
+        if _gb is not None and not _gb.empty:
+            st.caption("Bets graded")
+            st.dataframe(_gb[["date", "batter", "prop", "line", "side", "odds", "stake", "actual", "result", "profit"]].tail(40),
+                         use_container_width=True, hide_index=True)
+        if (_gl is None or _gl.empty) and (_gb is None or _gb.empty):
+            st.caption("Nothing graded yet.")
 
 
+with tab_paper:
     with st.expander("Paper bankroll — every model pick (verification)"):
         st.caption("Hypothetical flat 1-unit bankroll betting the model's lean on EVERY graded "
                    "projection at one assumed price — uses your full sample, not just real bets. "
@@ -1226,7 +1225,7 @@ with tab_perf:
         _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
                                      odds_lookup=(_olu if _use_real else None),
                                      real_only=(_use_real and _real_only),
-                                     stake_mode=_sm, kelly_mult=float(kelly_mult), temp=float(T_total))
+                                     stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP)
         _cov = []
         for _cpp, _clbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
             _csub = _log[_log["prop"].astype(str).str.upper() == _cpp] if (_log is not None and not _log.empty) else _log
@@ -1271,7 +1270,7 @@ with tab_perf:
                 _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
                                       odds_lookup=(_olu if _use_real else None),
                                       real_only=(_use_real and _real_only),
-                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp=float(T_total))
+                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP)
                 if _s.get("n"):
                     _pp_rows.append({"Prop": _lbl, "Bets": _s["n"],
                                      "Hit%": round(_s["hit_rate"]*100, 1),
@@ -1354,36 +1353,42 @@ with tab_perf:
         else:
             st.caption(f"No graded {label} bets yet.")
 
-    _tabs = st.tabs(["Total Bases", "Hits + Runs + RBIs"])
-    for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
-        with _tab:
-            _pl = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
-            _pb = _bets[_bets["prop"].astype(str).str.upper() == _pp] if not _bets.empty else _bets
-            _prop_view(_pl, _pb, _lbl)
 
-    _baseline = float(start_bk) - _realized
-    _allcurve = T.bankroll_curve(_bets, _baseline)
-    if not _allcurve.empty:
-        st.subheader("Bankroll — combined (all props)")
-        st.caption("Dollar ledger ending at your current balance — how you got here from logged bets across both props.")
-        _abs = T.bankroll_stats(_allcurve, _baseline)
-        _cc1, _cc2, _cc3 = st.columns(3)
-        _cc2.metric("Peak", f"${_abs['peak']:,.2f}")
-        _cc3.metric("Max drawdown", f"{_abs['max_drawdown_pct']:.1f}%")
-        st.line_chart(_allcurve.set_index("n")["bankroll"], height=260,
-                      x_label="settled bets", y_label="bankroll ($)")
-
-    with st.expander("Recent graded results (verify)"):
-        _isdone = lambda d: d["graded"].astype(str).isin(["1", "1.0", "True"])
-        _gl = _log[_isdone(_log)] if not _log.empty else _log
-        if _gl is not None and not _gl.empty:
-            st.caption("Projections graded vs actual")
-            st.dataframe(_gl[["date", "batter", "prop", "line", "proj", "actual", "over_hit"]].tail(40),
-                         use_container_width=True, hide_index=True)
-        _gb = _bets[_isdone(_bets)] if not _bets.empty else _bets
-        if _gb is not None and not _gb.empty:
-            st.caption("Bets graded")
-            st.dataframe(_gb[["date", "batter", "prop", "line", "side", "odds", "stake", "actual", "result", "profit"]].tail(40),
-                         use_container_width=True, hide_index=True)
-        if (_gl is None or _gl.empty) and (_gb is None or _gb.empty):
-            st.caption("Nothing graded yet.")
+with tab_clv:
+    with st.expander("Closing lines & CLV — enter the close for your bets"):
+        st.caption("For each bet, enter the closing price of the side you took (American, e.g. -110). "
+                   "CLV = how your price compares to the close; beating the close consistently is the "
+                   "strongest evidence your edge is real, independent of wins/losses.")
+        _cb = _bets.copy()
+        if _cb.empty:
+            st.caption("No bets logged yet.")
+        else:
+            _cb = _cb.reset_index(drop=True)
+            if "close_odds" not in _cb.columns:
+                _cb["close_odds"] = ""
+            _cv = _cb[["date", "batter", "prop", "side", "line", "odds", "close_odds"]].copy()
+            _cv["close_odds"] = _cv["close_odds"].fillna("").astype(str).replace("nan", "")
+            _ced = st.data_editor(
+                _cv, key="clv_editor", hide_index=True, use_container_width=True,
+                disabled=["date", "batter", "prop", "side", "line", "odds"],
+                column_config={"close_odds": st.column_config.TextColumn(
+                    "Closing odds", help="American odds at/near close for the side you bet, e.g. -110")})
+            if st.button("Save closing odds"):
+                _cb["close_odds"] = _ced["close_odds"].values
+                try:
+                    T.write_bets(_cb)
+                    _invalidate_tracker_cache()
+                    st.success("Saved closing odds.")
+                    st.rerun()
+                except Exception as ex:
+                    st.warning(f"Save failed: {ex}")
+            _cm = T.clv_metrics(_cb)
+            if _cm and _cm["n"]:
+                cl1, cl2, cl3 = st.columns(3)
+                cl1.metric("Bets with close", _cm["n"])
+                cl2.metric("Avg CLV", f"{_cm['avg_clv']*100:+.1f}%",
+                           help="Average % your price beat the closing price. Positive = good.")
+                cl3.metric("Positive-CLV rate", f"{_cm['pos_rate']*100:.0f}%",
+                           help="Share of bets that beat the close. Aim well above 50%.")
+            else:
+                st.caption("Enter closing odds above to see CLV metrics.")

@@ -706,7 +706,7 @@ def avg_realized_odds(bets):
 
 
 def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=None,
-              real_only=False, stake_mode="flat", kelly_mult=0.25, max_frac=0.10, temp=1.0):
+              real_only=False, stake_mode="flat", kelly_mult=0.25, max_frac=0.10, temp=1.0, temp_map=None):
     """Hypothetical paper bankroll betting the model's lean on graded projections.
 
       odds_lookup : {(iso_date, PROP, batter): {over, under}} -> use your REAL entered
@@ -738,9 +738,10 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
     for _, r in g.iterrows():
         p = float(r["p"]); oh = float(r["oh"])
         conf = max(p, 1 - p); lean_over = p >= 0.5
+        prop_u = str(r.get("prop", "")).upper()
         dec = None
         if odds_lookup:
-            key = (_iso(r.get("date")), str(r.get("prop", "")).upper(), str(r.get("batter", "")).strip())
+            key = (_iso(r.get("date")), prop_u, str(r.get("batter", "")).strip())
             rec = odds_lookup.get(key)
             if rec:
                 dec = _american_to_decimal(rec.get("over") if lean_over else rec.get("under"))
@@ -755,10 +756,11 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
         win = (lean_over) == (oh > 0.5)
         if stake_mode == "kelly":
             conf_k = conf
-            if temp and temp != 1.0 and 0 < p < 1:
+            _t = (temp_map.get(prop_u, temp) if temp_map else temp)
+            if _t and _t != 1.0 and 0 < p < 1:
                 import math as _m
-                _pc = 1.0 / (1.0 + _m.exp(-(_m.log(p / (1 - p)) / temp)))
-                conf_k = max(_pc, 1 - _pc)   # calibrated confidence -> realistic stake
+                _pc = 1.0 / (1.0 + _m.exp(-(_m.log(p / (1 - p)) / _t)))
+                conf_k = max(_pc, 1 - _pc)   # per-prop calibrated confidence -> realistic stake
             b = dec - 1.0
             f = ((b * conf_k - (1 - conf_k)) / b) if b > 0 else 0.0
             f = min(max(0.0, f) * kelly_mult, max_frac)
