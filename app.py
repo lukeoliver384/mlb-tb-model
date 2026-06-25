@@ -85,7 +85,7 @@ _seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
 _seed("ui_regk", int(E.REG_K_PA))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
-_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5); _seed("ui_caltemp", 1.0)
+_seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5); _seed("ui_caltemp", 1.5); _seed("ui_autocal", False)
 _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
 _seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
 _seed("ui_statcast", True); _seed("ui_wstatcast", 0.5); _seed("ui_arsenal", False)
@@ -131,10 +131,13 @@ with st.sidebar:
         use_components = st.checkbox("Per-event log5 (advanced)", key="ui_components")
         method = st.radio("Cover-probability method",
                           ["Exact distribution (recommended)", "Poisson (sheet original)"], key="ui_method")
-        use_calibration = st.checkbox("Apply calibration correction (auto, data-driven)", key="ui_calib",
-                                      help="Fits a temperature from graded results. Heavily regularized — barely moves until ~200 graded legs.")
-        cal_temp = st.slider("Manual confidence compression", 1.0, 2.5, step=0.05, key="ui_caltemp",
-                             help="Pulls probabilities toward 50% to fix overconfidence (>1 = more compression; leaves 50% unchanged, bites hardest at the extremes). Set from the confidence-vs-actual table. Stacks with auto.")
+        use_calibration = st.checkbox("Apply confidence compression", key="ui_calib",
+                                      help="Master on/off. Pulls probabilities toward 50% to fix overconfidence. Off = raw model probabilities.")
+        auto_cal = st.checkbox("Auto-fit temperature from graded data", key="ui_autocal", disabled=not use_calibration,
+                               help="Fit the temperature from results instead of setting it by hand.")
+        cal_temp = st.slider("Compression temperature", 1.0, 5.0, step=0.05, key="ui_caltemp",
+                             disabled=(not use_calibration) or auto_cal,
+                             help="Higher = more compression toward 50% (1.0 = none). Set from the confidence-vs-actual table.")
         hrr_disp = st.slider("H+R+RBI variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_hrrdisp",
                              help="Overdispersion for H+R+RBI. 1.0 = Poisson (most confident); higher spreads probabilities toward 50%. Tune via the confidence-vs-actual tracker.")
         k_disp = st.slider("Strikeouts variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_kdisp",
@@ -173,7 +176,7 @@ with st.sidebar:
 
 # Persist sidebar settings (one write only when something changed)
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
-           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_caltemp",
+           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_method", "ui_calib", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_caltemp",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
            "ui_kwhiff", "ui_wkwhiff"]
@@ -287,12 +290,17 @@ if not slate:
             "until then you'll see probable pitchers but empty lineups.")
     st.stop()
 
-try:
-    T_cal, T_caln = T.calibration_temperature(_log_cached()) if use_calibration else (1.0, 0)
-except Exception:
-    T_cal, T_caln = 1.0, 0
-# Manual slider OVERRIDES the auto fit when set (don't multiply — stacking ran away to 4.5+).
-T_total = float(cal_temp) if float(cal_temp) != 1.0 else float(T_cal)
+T_cal, T_caln = 1.0, 0
+if use_calibration and auto_cal:
+    try:
+        T_cal, T_caln = T.calibration_temperature(_log_cached())
+    except Exception:
+        T_cal, T_caln = 1.0, 0
+    T_total = float(T_cal)
+elif use_calibration:
+    T_total = float(cal_temp)
+else:
+    T_total = 1.0
 
 def _calibrate(p):
     if T_total == 1.0 or not (0 < p < 1):
@@ -300,13 +308,12 @@ def _calibrate(p):
     lp = math.log(p / (1 - p)) / T_total
     return 1.0 / (1.0 + math.exp(-lp))
 
-if T_total != 1.0:
-    if float(cal_temp) != 1.0:
-        _msg = f"manual {cal_temp}" + (f", overriding auto {T_cal}" if (use_calibration and T_cal != 1.0) else "")
-    else:
-        _msg = f"auto {T_cal} from {T_caln} graded legs"
-    st.caption(f"Confidence compression active — effective temperature {round(T_total, 3)} [{_msg}]. "
-               ">1 pulls probabilities toward 50% (fixes overconfidence).")
+if use_calibration and T_total != 1.0:
+    _msg = (f"auto {round(T_cal, 3)} from {T_caln} graded legs" if auto_cal else f"manual {cal_temp}")
+    st.caption(f"Confidence compression ON — temperature {round(T_total, 3)} [{_msg}]. "
+               ">1 pulls probabilities toward 50%.")
+elif use_calibration:
+    st.caption("Confidence compression ON but temperature is 1.0 (no effect) — raise the slider or check Auto-fit.")
 
 # Dynamic bankroll: realized P&L so far updates the current bankroll used for sizing.
 _bets = _bets_cached()
