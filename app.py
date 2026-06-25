@@ -1220,7 +1220,7 @@ with tab_perf:
         _real_only = st.checkbox("Grade only picks I have odds for (skip fallback)", value=True, key="paper_realonly",
                                  disabled=not _use_real,
                                  help="Truest paper bankroll of your actual candidates — excludes picks you never priced instead of pricing them at the fallback.")
-        _stake_mode = st.radio("Stake", ["Flat 1u (measures edge)", "Kelly (realistic growth)"],
+        _stake_mode = st.radio("Stake", ["Flat 1u (measures edge)", "Kelly (fixed-fraction)"],
                                horizontal=True, key="paper_stake")
         _sm = "kelly" if _stake_mode.startswith("Kelly") else "flat"
         _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
@@ -1255,7 +1255,7 @@ with tab_perf:
             _q3.metric("ROI", f"{_psum['roi']*100:+.1f}%")
             if _sm == "kelly":
                 _q4.metric("Growth", f"{_psum.get('growth', 0)*100:+.1f}%",
-                           help=f"Compounding from 100u to {_psum.get('final', 0):.1f}u at {kelly_mult:g}x Kelly")
+                           help=f"Fixed-fraction Kelly off your starting bankroll (no compounding), {kelly_mult:g}x.")
             else:
                 _q4.metric("Units P/L", f"{_psum['profit']:+.1f}u")
             if _use_real:
@@ -1325,6 +1325,22 @@ with tab_perf:
                                      "confidence": st.column_config.NumberColumn("Avg conf", format="%d%%"),
                                      "hit_rate": st.column_config.NumberColumn("Actual hit", format="%d%%"),
                                      "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
+            cp = T.calibration_by_probability(plog)
+            if not cp.empty:
+                with st.expander("Calibration by model probability — P(over)"):
+                    st.caption("Does a P(over) of X% actually go over ~X%? Full range, so the low "
+                               "buckets show your under calibration too.")
+                    cpd = cp.copy()
+                    cpd["predicted"] = (cpd["predicted"] * 100).round(0)
+                    cpd["over_rate"] = (cpd["over_rate"] * 100).round(0)
+                    cpd["gap"] = (cpd["gap"] * 100).round(0)
+                    st.dataframe(cpd, use_container_width=True, hide_index=True,
+                                 column_config={
+                                     "bucket": "P(over) bucket",
+                                     "n": "Picks",
+                                     "predicted": st.column_config.NumberColumn("Avg P(over)", format="%d%%"),
+                                     "over_rate": st.column_config.NumberColumn("Actual over %", format="%d%%"),
+                                     "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
         else:
             st.caption(f"No graded {label} projections yet.")
         _bm = T.bet_metrics(pbets)
@@ -1352,7 +1368,6 @@ with tab_perf:
         st.caption("Dollar ledger ending at your current balance — how you got here from logged bets across both props.")
         _abs = T.bankroll_stats(_allcurve, _baseline)
         _cc1, _cc2, _cc3 = st.columns(3)
-        _cc1.metric("Current bankroll", f"${_abs['current']:,.2f}", f"{_abs['growth_pct']:+.1f}%")
         _cc2.metric("Peak", f"${_abs['peak']:,.2f}")
         _cc3.metric("Max drawdown", f"{_abs['max_drawdown_pct']:.1f}%")
         st.line_chart(_allcurve.set_index("n")["bankroll"], height=260,

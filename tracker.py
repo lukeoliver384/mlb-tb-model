@@ -353,6 +353,30 @@ def prediction_breakdown(log: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def calibration_by_probability(log: pd.DataFrame) -> pd.DataFrame:
+    """Reliability diagram by RAW model probability P(over): bucket graded picks by
+    P(over) across the full 0-100% range and show the actual over rate in each. Tells
+    you whether a P(over)=70% really goes over ~70% (and the low end too, for unders)."""
+    g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    if g.empty:
+        return pd.DataFrame()
+    g["p"] = pd.to_numeric(g["p_over"], errors="coerce")
+    g["oh"] = pd.to_numeric(g["over_hit"], errors="coerce")
+    g = g.dropna(subset=["p", "oh"])
+    if g.empty:
+        return pd.DataFrame()
+    bins = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.01]
+    labels = ["0-10%", "10-20%", "20-30%", "30-40%", "40-50%",
+              "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"]
+    g["bucket"] = pd.cut(g["p"], bins=bins, labels=labels, right=False)
+    out = g.groupby("bucket", observed=True).agg(
+        n=("oh", "size"),
+        predicted=("p", "mean"),
+        over_rate=("oh", "mean")).reset_index()
+    out["gap"] = out["over_rate"] - out["predicted"]
+    return out
+
+
 def calibration_by_confidence(log: pd.DataFrame) -> pd.DataFrame:
     """Bucket graded picks by the model's confidence on its leaned side, and show
     the actual hit rate of that side. Tells you whether a '60%' really hits ~60%."""
@@ -738,7 +762,7 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
             b = dec - 1.0
             f = ((b * conf_k - (1 - conf_k)) / b) if b > 0 else 0.0
             f = min(max(0.0, f) * kelly_mult, max_frac)
-            stake = f * bk
+            stake = f * start_units   # fixed fraction of STARTING bankroll (no compounding)
         else:
             stake = 1.0
         step = stake * (dec - 1.0) if win else -stake
