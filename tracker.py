@@ -141,6 +141,29 @@ def log_projections(proj_df: pd.DataFrame, date_str: str,
     return len(new)
 
 
+def bulk_log(new_df) -> int:
+    """One-shot projection logger: write many (date, prop) groups in a SINGLE sheet
+    rewrite (avoids per-day rate-limit stalls). new_df needs at least date, batter,
+    batter_id, pitcher, venue, line, prop, proj, pred_side, p_over."""
+    if new_df is None or len(new_df) == 0:
+        return 0
+    new_df = new_df.copy()
+    for c in ("actual", "actual_side", "over_hit", "correct"):
+        if c not in new_df.columns:
+            new_df[c] = None
+    if "graded" not in new_df.columns:
+        new_df["graded"] = 0
+    new_df = new_df.reindex(columns=LOG_COLUMNS)
+    log = read_log()
+    if log is not None and not log.empty:
+        pairs = set(zip(new_df["date"].astype(str), new_df["prop"].astype(str)))
+        keep = ~log.apply(lambda r: (str(r["date"]), str(r["prop"])) in pairs, axis=1)
+        log = log[keep]
+    out = new_df if (log is None or log.empty) else pd.concat([log, new_df], ignore_index=True)
+    write_log(out)
+    return int(len(new_df))
+
+
 def grade_diagnostic(season: int) -> dict:
     """Walk every UNGRADED row and tally why it would/wouldn't grade right now.
     Helps diagnose '0 graded' issues. Returns a dict of reason -> count (per prop too)."""
@@ -206,6 +229,18 @@ def grade_diagnostic(season: int) -> dict:
         if len(samples) >= 8:
             break
     out["_date_samples"] = samples
+    # today-grading check: which venues are Final vs which today rows are waiting
+    try:
+        out["_today_final_venues"] = sorted(v for v in D.final_venues(today) if v)
+    except Exception as e:
+        out["_today_final_venues"] = f"error: {e}"
+    tv = set()
+    for _, row in log.iterrows():
+        if str(row.get("graded")) in ("1", "1.0", "True"):
+            continue
+        if _iso(row["date"]) == today:
+            tv.add(str(row.get("venue", "")).strip())
+    out["_today_ungraded_venues"] = sorted(tv)
     out["_today"] = today
     out["_total_rows"] = int(len(log))
     return out
@@ -750,13 +785,13 @@ def calibration_temperature(log: pd.DataFrame):
 
     best_T, best_ll = 1.0, logloss(1.0)
     T = 0.5
-    while T <= 3.0001:
+    while T <= 2.0001:
         ll = logloss(T)
         if ll < best_ll:
             best_ll, best_T = ll, T
         T += 0.05
     # regularize toward 1.0 by sample size (full weight ~200 resolved legs)
-    w = min(1.0, n / 200.0)
+    w = min(1.0, n / 400.0)
     T_eff = 1.0 + (best_T - 1.0) * w
     return round(T_eff, 3), n
 

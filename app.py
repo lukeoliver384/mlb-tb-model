@@ -291,7 +291,8 @@ try:
     T_cal, T_caln = T.calibration_temperature(_log_cached()) if use_calibration else (1.0, 0)
 except Exception:
     T_cal, T_caln = 1.0, 0
-T_total = float(T_cal) * float(cal_temp)
+# Manual slider OVERRIDES the auto fit when set (don't multiply — stacking ran away to 4.5+).
+T_total = float(cal_temp) if float(cal_temp) != 1.0 else float(T_cal)
 
 def _calibrate(p):
     if T_total == 1.0 or not (0 < p < 1):
@@ -300,14 +301,12 @@ def _calibrate(p):
     return 1.0 / (1.0 + math.exp(-lp))
 
 if T_total != 1.0:
-    _src = []
-    if use_calibration and T_cal != 1.0:
-        _src.append(f"auto {T_cal} ({T_caln} legs)")
     if float(cal_temp) != 1.0:
-        _src.append(f"manual {cal_temp}")
-    st.caption(f"Confidence compression active — effective temperature {round(T_total, 3)}"
-               + (f" [{' × '.join(_src)}]" if _src else "")
-               + ". >1 pulls probabilities toward 50% (fixes overconfidence).")
+        _msg = f"manual {cal_temp}" + (f", overriding auto {T_cal}" if (use_calibration and T_cal != 1.0) else "")
+    else:
+        _msg = f"auto {T_cal} from {T_caln} graded legs"
+    st.caption(f"Confidence compression active — effective temperature {round(T_total, 3)} [{_msg}]. "
+               ">1 pulls probabilities toward 50% (fixes overconfidence).")
 
 # Dynamic bankroll: realized P&L so far updates the current bankroll used for sizing.
 _bets = _bets_cached()
