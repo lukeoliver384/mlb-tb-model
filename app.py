@@ -624,6 +624,13 @@ def _lean(row):
         return "No lean"
     return "Over" if p > 0.5 else "Under"
 df["Lean"] = df.apply(_lean, axis=1)
+def _lean_pct(row):
+    p = row["P(Over)"]
+    if p is None or (isinstance(p, float) and pd.isna(p)) or row["Lean"] not in ("Over", "Under"):
+        return None
+    p = float(p)
+    return (p if p >= 0.5 else 1 - p) * 100
+df["Lean %"] = df.apply(_lean_pct, axis=1)
 
 bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"], r.get("Venue", ""))
            for _, r in df.iterrows()}
@@ -664,7 +671,7 @@ with tab_bet:
     st.subheader("Projections")
     st.caption(f"Every hitter vs the opposing starter, sorted by projected {STAT}. Add odds below for edges.")
     view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
-                 "vsSP%", proj_col, "P(Over)", "Lean", "Fair Over odds", "Conf", "Venue", "Wx"]
+                 "vsSP%", proj_col, "P(Over)", "Lean", "Lean %", "Fair Over odds", "Conf", "Venue", "Wx"]
     dfv = df[view_cols].sort_values(proj_col, ascending=False).copy()
     dfv["P(Over)"] = dfv["P(Over)"] * 100
     dfv["Conf"] = dfv["Conf"].apply(lambda n: "★" * int(n) if pd.notna(n) else "")
@@ -675,6 +682,7 @@ with tab_bet:
             "vsSP%": st.column_config.NumberColumn("vs SP", format="%d%%", help="Share of PAs vs the starter"),
             proj_col: st.column_config.NumberColumn(proj_col, format="%.2f"),
             "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.1f%%"),
+            "Lean %": st.column_config.NumberColumn("Lean %", format="%.0f%%", help="Model probability on the side it leans"),
             "Fair Over odds": st.column_config.NumberColumn("Fair Over", format="%+d"),
             "Conf": st.column_config.TextColumn("Conf", help="Data-quality confidence (sample size + split depth), not edge"),
             "Wx": st.column_config.TextColumn("Weather"),
