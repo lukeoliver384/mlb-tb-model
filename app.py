@@ -1156,7 +1156,7 @@ with tab_perf:
                 st.success(f"Backfill complete: logged {_tot} projections over {_days} day(s), "
                            f"graded {_ng} projections and {_nb} bets.")
 
-    def _prop_view(plog, pbets, label):
+    def _prop_view(plog, pbets, label, prop_temp=1.0):
         _m = T.metrics(plog)
         if _m:
             g1, g2, g3, g4 = st.columns(4)
@@ -1188,22 +1188,25 @@ with tab_perf:
                                      "confidence": st.column_config.NumberColumn("Avg conf", format="%d%%"),
                                      "hit_rate": st.column_config.NumberColumn("Actual hit", format="%d%%"),
                                      "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
-            cp = T.calibration_by_probability(plog)
+            cp = T.calibration_by_probability(plog, temp=float(prop_temp))
             if not cp.empty:
                 with st.expander("Calibration by model probability — P(over)"):
-                    st.caption("Does a P(over) of X% actually go over ~X%? Full range, so the low "
-                               "buckets show your under calibration too.")
+                    st.caption(f"Does a P(over) of X% actually go over ~X%? 'Calibrated' applies your "
+                               f"current {label} temperature ({prop_temp:g}) to preview the fix against ALL "
+                               f"history — aim to flatten 'Gap (cal)' toward 0.")
                     cpd = cp.copy()
-                    cpd["predicted"] = (cpd["predicted"] * 100).round(0)
-                    cpd["over_rate"] = (cpd["over_rate"] * 100).round(0)
-                    cpd["gap"] = (cpd["gap"] * 100).round(0)
+                    for _c in ("predicted", "calibrated", "over_rate", "gap", "gap_cal"):
+                        if _c in cpd.columns:
+                            cpd[_c] = (cpd[_c] * 100).round(0)
                     st.dataframe(cpd, use_container_width=True, hide_index=True,
                                  column_config={
                                      "bucket": "P(over) bucket",
                                      "n": "Picks",
                                      "predicted": st.column_config.NumberColumn("Avg P(over)", format="%d%%"),
+                                     "calibrated": st.column_config.NumberColumn("Calibrated", format="%d%%"),
                                      "over_rate": st.column_config.NumberColumn("Actual over %", format="%d%%"),
-                                     "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
+                                     "gap": st.column_config.NumberColumn("Gap (raw)", format="%+d pts"),
+                                     "gap_cal": st.column_config.NumberColumn("Gap (cal)", format="%+d pts")})
         else:
             st.caption(f"No graded {label} projections yet.")
         _bm = T.bet_metrics(pbets)
@@ -1222,19 +1225,42 @@ with tab_perf:
         with _tab:
             _pl = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
             _pb = _bets[_bets["prop"].astype(str).str.upper() == _pp] if not _bets.empty else _bets
-            _prop_view(_pl, _pb, _lbl)
+            _prop_view(_pl, _pb, _lbl, prop_temp=TEMP_MAP.get(_pp, 1.0))
 
-    _baseline = float(start_bk) - _realized
-    _allcurve = T.bankroll_curve(_bets, _baseline)
+    # Fixed performance anchor: the curve/peak/drawdown are built from a STORED starting
+    # bankroll, so retyping the sizing bankroll no longer shifts the historical peak.
+    _perf_start = T.get_setting("perf_start", None)
+    try:
+        _perf_start = float(_perf_start)
+    except (TypeError, ValueError):
+        _perf_start = None
+    if _perf_start is None or _perf_start <= 0:
+        _perf_start = max(1.0, float(start_bk) - _realized)
+        try:
+            T.set_setting("perf_start", _perf_start)
+        except Exception:
+            pass
+    _allcurve = T.bankroll_curve(_bets, _perf_start)
     if not _allcurve.empty:
         st.subheader("Bankroll — combined (all props)")
-        st.caption("Dollar ledger ending at your current balance — how you got here from logged bets across both props.")
-        _abs = T.bankroll_stats(_allcurve, _baseline)
+        st.caption("Built from your fixed starting bankroll through logged bets (both props). "
+                   "Peak and drawdown are historical — they don't move when you change the sizing bankroll.")
+        _abs = T.bankroll_stats(_allcurve, _perf_start)
         _cc1, _cc2, _cc3 = st.columns(3)
+        _cc1.metric("Bankroll (from results)", f"${_abs['current']:,.2f}", f"{_abs['growth_pct']:+.1f}%")
         _cc2.metric("Peak", f"${_abs['peak']:,.2f}")
         _cc3.metric("Max drawdown", f"{_abs['max_drawdown_pct']:.1f}%")
         st.line_chart(_allcurve.set_index("n")["bankroll"], height=260,
                       x_label="settled bets", y_label="bankroll ($)")
+        st.caption(f"Performance anchored at ${_perf_start:,.0f}. Deposited or withdrew? Re-anchor:")
+        if st.button("Re-anchor start to current balance",
+                     help="Sets the performance start to (current bankroll − realized P&L). Use after adding/removing cash."):
+            try:
+                T.set_setting("perf_start", max(1.0, float(start_bk) - _realized))
+                _invalidate_tracker_cache()
+                st.success("Re-anchored — reload to update the curve.")
+            except Exception as ex:
+                st.warning(f"Could not re-anchor: {ex}")
 
     with st.expander("Recent graded results (verify)"):
         _isdone = lambda d: d["graded"].astype(str).isin(["1", "1.0", "True"])
@@ -1283,10 +1309,23 @@ with tab_paper:
         _stake_mode = st.radio("Stake", ["Flat 1u (measures edge)", "Kelly (fixed-fraction)"],
                                horizontal=True, key="paper_stake")
         _sm = "kelly" if _stake_mode.startswith("Kelly") else "flat"
+        _pstart_saved = T.get_setting("perf_start", 235.0)
+        try:
+            _pstart_saved = float(_pstart_saved)
+        except (TypeError, ValueError):
+            _pstart_saved = 235.0
+        _pstart = st.number_input("Starting bankroll ($)", 1.0, 1e7, value=_pstart_saved, step=5.0,
+                                  key="paper_start_bk",
+                                  help="Dollar starting point for the paper bankroll (and the Performance bankroll anchor).")
+        if float(_pstart) != _pstart_saved:
+            try:
+                T.set_setting("perf_start", float(_pstart))
+            except Exception:
+                pass
         _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
                                      odds_lookup=(_olu if _use_real else None),
                                      real_only=(_use_real and _real_only),
-                                     stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP)
+                                     stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP, start_units=_pstart)
         _cov = []
         for _cpp, _clbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
             _csub = _log[_log["prop"].astype(str).str.upper() == _cpp] if (_log is not None and not _log.empty) else _log
@@ -1317,13 +1356,13 @@ with tab_paper:
                 _q4.metric("Growth", f"{_psum.get('growth', 0)*100:+.1f}%",
                            help=f"Fixed-fraction Kelly off your starting bankroll (no compounding), {kelly_mult:g}x.")
             else:
-                _q4.metric("Units P/L", f"{_psum['profit']:+.1f}u")
+                _q4.metric("$ P/L", f"${_psum['profit']:+,.0f}")
             if _use_real:
                 st.caption(f"{_psum.get('n_real', 0)} of {_psum['n']} picks used your real entered odds; "
                            f"the rest used {int(_po):+d}.")
             if not _pcurve.empty:
                 st.line_chart(_pcurve.set_index("n")["bankroll"], height=240,
-                              x_label="paper bets", y_label="units")
+                              x_label="paper bets", y_label="$")
             _pp_rows = []
             _pp_curves = []
             for _pp, _lbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
@@ -1331,13 +1370,13 @@ with tab_paper:
                 _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
                                       odds_lookup=(_olu if _use_real else None),
                                       real_only=(_use_real and _real_only),
-                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP)
+                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP, start_units=_pstart)
                 if _s.get("n"):
                     _pp_rows.append({"Prop": _lbl, "Bets": _s["n"],
                                      "Hit%": round(_s["hit_rate"]*100, 1),
                                      "Break-even%": round(_s["breakeven"]*100, 1),
                                      "ROI%": round(_s["roi"]*100, 1),
-                                     "Units": round(_s["profit"], 1)})
+                                     "$ P/L": round(_s["profit"], 0)})
                     if not _sc.empty:
                         _pp_curves.append((_lbl, _s, _sc))
             if _pp_rows:
@@ -1347,7 +1386,7 @@ with tab_paper:
                 st.caption(f"{_lbl} — paper bankroll  ·  {_s['n']} bets, "
                            f"{_s['hit_rate']*100:.1f}% hit, ROI {_s['roi']*100:+.1f}%")
                 st.line_chart(_sc.set_index("n")["bankroll"], height=200,
-                              x_label="paper bets", y_label="units")
+                              x_label="paper bets", y_label="$")
             st.caption("Uses your real entered odds where available (else the fallback price). Picks you never "
                        "priced use the fallback, so coverage grows as you log more odds.")
         else:

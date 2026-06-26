@@ -353,10 +353,12 @@ def prediction_breakdown(log: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def calibration_by_probability(log: pd.DataFrame) -> pd.DataFrame:
-    """Reliability diagram by RAW model probability P(over): bucket graded picks by
-    P(over) across the full 0-100% range and show the actual over rate in each. Tells
-    you whether a P(over)=70% really goes over ~70% (and the low end too, for unders)."""
+def calibration_by_probability(log: pd.DataFrame, temp: float = 1.0) -> pd.DataFrame:
+    """Reliability diagram by RAW model probability P(over). If temp>1, also shows the
+    'calibrated' column = each row's P(over) compressed by that temperature, and gap_cal
+    = actual over rate minus the calibrated prediction. Lets you preview a temperature
+    against your whole history (the live cumulative table only reflects it on new rows)."""
+    import math
     g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
     if g.empty:
         return pd.DataFrame()
@@ -365,6 +367,12 @@ def calibration_by_probability(log: pd.DataFrame) -> pd.DataFrame:
     g = g.dropna(subset=["p", "oh"])
     if g.empty:
         return pd.DataFrame()
+
+    def _cal(p):
+        if temp == 1.0 or not (0 < p < 1):
+            return p
+        return 1.0 / (1.0 + math.exp(-(math.log(p / (1 - p)) / temp)))
+    g["pc"] = g["p"].apply(_cal)
     bins = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.01]
     labels = ["0-10%", "10-20%", "20-30%", "30-40%", "40-50%",
               "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"]
@@ -372,8 +380,10 @@ def calibration_by_probability(log: pd.DataFrame) -> pd.DataFrame:
     out = g.groupby("bucket", observed=True).agg(
         n=("oh", "size"),
         predicted=("p", "mean"),
+        calibrated=("pc", "mean"),
         over_rate=("oh", "mean")).reset_index()
     out["gap"] = out["over_rate"] - out["predicted"]
+    out["gap_cal"] = out["over_rate"] - out["calibrated"]
     return out
 
 
@@ -766,7 +776,7 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
             f = min(max(0.0, f) * kelly_mult, max_frac)
             stake = f * start_units   # fixed fraction of STARTING bankroll (no compounding)
         else:
-            stake = 1.0
+            stake = 0.01 * start_units   # flat unit = 1% of starting bankroll
         step = stake * (dec - 1.0) if win else -stake
         i += 1
         wins += 1 if win else 0
