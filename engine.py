@@ -179,6 +179,40 @@ def blend(actual: float, expected: "float | None", w_expected: float) -> float:
     return (1 - w_expected) * actual + w_expected * expected
 
 
+# Times-through-the-order penalty: a starter fades as he faces the lineup again —
+# K rate drops, hittability rises. Multipliers vs his season-average rate, set so a
+# typical full outing stays ~neutral (it's the depth/redistribution that matters).
+TTO_K_MULT = {1: 1.06, 2: 1.00, 3: 0.92, 4: 0.85}     # strikeout rate by time through
+TTO_TB_MULT = {1: 0.96, 2: 1.00, 3: 1.06, 4: 1.10}    # total-bases / hittability by time through
+
+def pa_by_tto(slot: int, sp_bf_per_start: float, total_pa: float) -> list:
+    """The slot's PAs vs the starter, split by time through the order: [tto1, tto2, ...].
+    Sums to pa_vs_starter(slot, ...)."""
+    if sp_bf_per_start <= 0 or slot < 1:
+        return []
+    full = int(sp_bf_per_start // 9)
+    rem = sp_bf_per_start - full * 9
+    out = [1.0] * full
+    if slot <= int(rem):
+        out.append(1.0)
+    elif slot == int(rem) + 1:
+        out.append(rem - int(rem))
+    # cap to the batter's total expected PAs
+    capped, run = [], 0.0
+    for x in out:
+        if run + x <= total_pa:
+            capped.append(x); run += x
+        else:
+            capped.append(max(0.0, total_pa - run)); break
+    return capped
+
+def tto_weighted(slot: int, sp_bf_per_start: float, total_pa: float, mult: dict) -> float:
+    """Sum of PAs vs starter weighted by a per-time-through multiplier (K or TB)."""
+    pas = pa_by_tto(slot, sp_bf_per_start, total_pa)
+    last = mult[max(mult)]
+    return sum(pa * mult.get(k, last) for k, pa in enumerate(pas, 1))
+
+
 def pa_vs_starter(slot: int, sp_bf_per_start: float, total_pa: float) -> float:
     """
     Expected number of this slot's PAs that come against the STARTER.

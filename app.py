@@ -355,9 +355,12 @@ def project_pitcher_k(pitcher, lineup):
                 pk = w_eff * implied + (1 - w_eff) * pk
         km = E.log5_rate(bk, pk, E.LEAGUE_K_PA)
         tp = PF.expected_pa(b.order)
-        exp_pa = (E.pa_vs_starter(b.order, pitcher.bf_per_start, tp)
-                  if pitcher.bf_per_start > 0 else tp)
-        total_k += km * exp_pa
+        if pitcher.bf_per_start > 0:
+            exp_pa = E.pa_vs_starter(b.order, pitcher.bf_per_start, tp)
+            eff_pa = E.tto_weighted(b.order, pitcher.bf_per_start, tp, E.TTO_K_MULT)  # times-through taper
+        else:
+            exp_pa = eff_pa = tp
+        total_k += km * eff_pa
         bf_used += exp_pa
     return total_k, bf_used
 
@@ -993,12 +996,14 @@ with tab_bet:
         if not _val.empty:
             st.subheader("Top 5 value plays")
             st.caption("Ranked by expected ROI at your price (not hit rate) — plus-money value floats up.")
-            _vshow = _val[["Batter", "Side", "Line", "Odds", "Model EV", "Edge", "Stake $", "Conf"]].copy()
+            _vshow = _val[["Batter", "Side", "Line", "Odds", "Model P", "Model EV", "Edge", "Stake $", "Conf"]].copy()
             _vshow["Edge"] = _vshow["Edge"] * 100      # fraction -> percentage points
             _vshow["Model EV"] = _vshow["Model EV"] * 100
+            _vshow["Model P"] = _vshow["Model P"] * 100
             st.dataframe(_vshow, use_container_width=True, hide_index=True,
                          column_config={
                              "Odds": st.column_config.NumberColumn("Odds", format="%+d"),
+                             "Model P": st.column_config.NumberColumn("Model %", format="%.1f%%", help="Model probability on the side you're betting"),
                              "Model EV": st.column_config.NumberColumn("EV (ROI)", format="%+.1f%%"),
                              "Edge": st.column_config.NumberColumn("Edge", format="%+.1f%%"),
                              "Stake $": st.column_config.NumberColumn("Stake", format="$%.2f"),
@@ -1237,22 +1242,25 @@ with tab_perf:
 
     # Fixed performance anchor: the curve/peak/drawdown are built from a STORED starting
     # bankroll, so retyping the sizing bankroll no longer shifts the historical peak.
-    _perf_start = T.get_setting("perf_start", None)
+    _ps_saved = T.get_setting("perf_start", 235.0)
     try:
-        _perf_start = float(_perf_start)
+        _ps_saved = float(_ps_saved)
     except (TypeError, ValueError):
-        _perf_start = None
-    if _perf_start is None or _perf_start <= 0:
-        _perf_start = max(1.0, float(start_bk) - _realized)
+        _ps_saved = 235.0
+    if _ps_saved <= 0:
+        _ps_saved = 235.0
+    _perf_start = st.number_input("Starting bankroll ($)", 1.0, 1e7, value=_ps_saved, step=5.0,
+                                  key="perf_start_bk",
+                                  help="Your fixed starting bankroll — anchors this curve AND the Paper Bankroll tab. Set once.")
+    if float(_perf_start) != _ps_saved:
         try:
-            T.set_setting("perf_start", _perf_start)
+            T.set_setting("perf_start", float(_perf_start))
         except Exception:
             pass
     _allcurve = T.bankroll_curve(_bets, _perf_start)
     if not _allcurve.empty:
         st.subheader("Bankroll — combined (all props)")
-        st.caption("Built from your fixed starting bankroll through logged bets (both props). "
-                   "Peak and drawdown are historical — they don't move when you change the sizing bankroll.")
+        st.caption("Built from your fixed starting bankroll through logged bets. Peak and drawdown are historical.")
         _abs = T.bankroll_stats(_allcurve, _perf_start)
         _cc1, _cc2, _cc3 = st.columns(3)
         _cc1.metric("Bankroll (from results)", f"${_abs['current']:,.2f}", f"{_abs['growth_pct']:+.1f}%")
@@ -1260,15 +1268,6 @@ with tab_perf:
         _cc3.metric("Max drawdown", f"{_abs['max_drawdown_pct']:.1f}%")
         st.line_chart(_allcurve.set_index("n")["bankroll"], height=260,
                       x_label="settled bets", y_label="bankroll ($)")
-        st.caption(f"Performance anchored at ${_perf_start:,.0f}. Deposited or withdrew? Re-anchor:")
-        if st.button("Re-anchor start to current balance",
-                     help="Sets the performance start to (current bankroll − realized P&L). Use after adding/removing cash."):
-            try:
-                T.set_setting("perf_start", max(1.0, float(start_bk) - _realized))
-                _invalidate_tracker_cache()
-                st.success("Re-anchored — reload to update the curve.")
-            except Exception as ex:
-                st.warning(f"Could not re-anchor: {ex}")
 
     with st.expander("Recent graded results (verify)"):
         _isdone = lambda d: d["graded"].astype(str).isin(["1", "1.0", "True"])
@@ -1317,23 +1316,19 @@ with tab_paper:
         _stake_mode = st.radio("Stake", ["Flat 1u (measures edge)", "Kelly (fixed-fraction)"],
                                horizontal=True, key="paper_stake")
         _sm = "kelly" if _stake_mode.startswith("Kelly") else "flat"
-        _pstart_saved = T.get_setting("perf_start", 235.0)
+        _pstart = T.get_setting("perf_start", 235.0)
         try:
-            _pstart_saved = float(_pstart_saved)
+            _pstart = float(_pstart)
         except (TypeError, ValueError):
-            _pstart_saved = 235.0
-        _pstart = st.number_input("Starting bankroll ($)", 1.0, 1e7, value=_pstart_saved, step=5.0,
-                                  key="paper_start_bk",
-                                  help="Dollar starting point for the paper bankroll (and the Performance bankroll anchor).")
-        if float(_pstart) != _pstart_saved:
-            try:
-                T.set_setting("perf_start", float(_pstart))
-            except Exception:
-                pass
+            _pstart = 235.0
+        if _pstart <= 0:
+            _pstart = 235.0
+        st.caption(f"Starting bankroll ${_pstart:,.0f} (set it in the Performance tab).")
         _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
                                      odds_lookup=(_olu if _use_real else None),
                                      real_only=(_use_real and _real_only),
-                                     stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP, start_units=_pstart)
+                                     stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP, start_units=_pstart,
+                                     max_frac=float(max_stake) / 100.0)
         _cov = []
         for _cpp, _clbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
             _csub = _log[_log["prop"].astype(str).str.upper() == _cpp] if (_log is not None and not _log.empty) else _log
@@ -1378,7 +1373,8 @@ with tab_paper:
                 _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
                                       odds_lookup=(_olu if _use_real else None),
                                       real_only=(_use_real and _real_only),
-                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP, start_units=_pstart)
+                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP, start_units=_pstart,
+                                     max_frac=float(max_stake) / 100.0)
                 if _s.get("n"):
                     _pp_rows.append({"Prop": _lbl, "Bets": _s["n"],
                                      "Hit%": round(_s["hit_rate"]*100, 1),
