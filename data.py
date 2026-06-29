@@ -40,6 +40,7 @@ class Pitcher:
     tb_per_bf_vs_l: float = 0.0
     tb_per_bf_vs_r: float = 0.0
     games_started: float = 0.0
+    avg_bf_start: float = 0.0   # true avg batters faced in games STARTED (from game log)
     r_allowed: float = 0.0
     k_allowed: float = 0.0
     h_allowed: float = 0.0
@@ -69,9 +70,10 @@ class Pitcher:
 
     @property
     def bf_per_start(self) -> float:
-        # bf is TOTAL batters faced (incl. relief), so bf/GS inflates for swingmen and is
-        # noisy with few starts. Regress toward a league-average start (~23 BF) and cap at a
-        # realistic single-start max so no pitcher is modeled "facing the lineup 4x".
+        # Prefer the TRUE per-start average from the game log (relief excluded). Fall back to
+        # bf/GS (regressed + capped) only if the game log wasn't available.
+        if self.avg_bf_start and self.avg_bf_start > 0:
+            return min(self.avg_bf_start, 30.0)
         if not self.games_started:
             return 0.0
         raw = self.bf / self.games_started
@@ -354,6 +356,24 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
     return b
 
 
+def avg_bf_per_start(pid: int, season: int):
+    """Average batters faced in games the pitcher actually STARTED (excludes relief),
+    from the season game log. None if no starts found — the truest per-start workload."""
+    try:
+        d = _get(f"{STATSAPI}/people/{pid}/stats",
+                 stats="gameLog", group="pitching", season=season, sportId=1)
+        bfs = []
+        for sp in d["stats"][0]["splits"]:
+            st = sp["stat"]
+            if int(float(st.get("gamesStarted", 0) or 0)) >= 1:
+                bf = float(st.get("battersFaced", 0) or 0)
+                if bf > 0:
+                    bfs.append(bf)
+        return sum(bfs) / len(bfs) if bfs else None
+    except Exception:
+        return None
+
+
 def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
     def _tb_allowed(st):
         h = float(st.get("hits", 0)); d = float(st.get("doubles", 0))
@@ -371,6 +391,12 @@ def fill_pitcher_stats(p: Pitcher, season: int) -> Pitcher:
         p.t_allowed = float(st.get("triples", 0)); p.hr_allowed = float(st.get("homeRuns", 0))
         p.r_allowed = float(st.get("runs", 0))
         p.k_allowed = float(st.get("strikeOuts", 0))
+    except Exception:
+        pass
+    try:
+        _abf = avg_bf_per_start(p.mlbam_id, season)
+        if _abf:
+            p.avg_bf_start = _abf
     except Exception:
         pass
     try:
