@@ -69,7 +69,14 @@ class Pitcher:
 
     @property
     def bf_per_start(self) -> float:
-        return self.bf / self.games_started if self.games_started else 0.0
+        # bf is TOTAL batters faced (incl. relief), so bf/GS inflates for swingmen and is
+        # noisy with few starts. Regress toward a league-average start (~23 BF) and cap at a
+        # realistic single-start max so no pitcher is modeled "facing the lineup 4x".
+        if not self.games_started:
+            return 0.0
+        raw = self.bf / self.games_started
+        blended = (raw * self.games_started + 23.0 * 3.0) / (self.games_started + 3.0)
+        return min(blended, 28.0)
 
     @property
     def h_per_bf(self) -> float:
