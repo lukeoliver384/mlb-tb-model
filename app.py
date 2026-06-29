@@ -82,7 +82,7 @@ def _seed(k, default):
 _seed("ui_prop", "Total Bases")
 _seed("ui_line", 1.5); _seed("ui_tossup", 0.03); _seed("ui_minedge", 0.05)
 _seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
-_seed("ui_regk", int(E.REG_K_PA))
+_seed("ui_regtb", int(E.REG_K_PA)); _seed("ui_reghrr", int(E.REG_K_PA)); _seed("ui_regkmod", int(getattr(E, "REG_KMODEL", 70)))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
 _seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5); _seed("ui_tbtemp", 1.5); _seed("ui_hrrtemp", 2.0); _seed("ui_ktemp", 1.4); _seed("ui_autocal", False)
@@ -125,7 +125,13 @@ with st.sidebar:
                 pass
 
     with st.expander("Model & matchup", expanded=False):
-        reg_k = st.number_input("Regression K (PA)", 0, 600, step=5, key="ui_regk")
+        st.caption("Regression-to-league sample size, per metric (each stat stabilizes at a different point):")
+        reg_tb = st.number_input("Regression — Total Bases (PA)", 0, 600, step=5, key="ui_regtb",
+                                 help="TB/SLG stabilizes slowly — ~175 PA.")
+        reg_hrr = st.number_input("Regression — H+R+RBI (PA)", 0, 600, step=5, key="ui_reghrr",
+                                  help="H+R+RBI rates; ~175 PA, same ballpark as TB. Calibration is handled by the per-prop temperature.")
+        reg_kmod = st.number_input("Regression — Strikeouts (BF)", 0, 400, step=5, key="ui_regkmod",
+                                   help="K rate stabilizes fast (~70 BF). Kept separate so low-K pitchers aren't washed to league.")
         use_splits = st.checkbox("Use L/R handedness splits", key="ui_splits")
         use_homeaway = st.checkbox("Home/away splits (regressed)", key="ui_homeaway")
         use_components = st.checkbox("Per-event log5 (advanced)", key="ui_components")
@@ -175,7 +181,7 @@ with st.sidebar:
 
 # Persist sidebar settings (one write only when something changed)
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
-           "ui_regk", "ui_splits", "ui_homeaway", "ui_components", "ui_calib", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_tbtemp", "ui_hrrtemp", "ui_ktemp",
+           "ui_regtb", "ui_reghrr", "ui_regkmod", "ui_splits", "ui_homeaway", "ui_components", "ui_calib", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_tbtemp", "ui_hrrtemp", "ui_ktemp",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
            "ui_kwhiff", "ui_wkwhiff"]
@@ -344,9 +350,9 @@ def project_pitcher_k(pitcher, lineup):
     total_k = bf_used = 0.0
     for b in lineup:
         k_pa, k_n = b.k_per_pa_vs(pitcher.throws)
-        bk = E.regress(k_pa, k_n, E.LEAGUE_K_PA, E.REG_KMODEL)   # K stabilizes fast; baked-in, not the global slider
+        bk = E.regress(k_pa, k_n, E.LEAGUE_K_PA, int(reg_kmod))
         p_k_bf, p_k_n = pitcher.k_per_bf_vs(b.bats) if use_splits else (pitcher.k_per_bf, pitcher.bf)
-        pk = E.regress(p_k_bf, p_k_n, E.LEAGUE_K_PA, E.REG_KMODEL)
+        pk = E.regress(p_k_bf, p_k_n, E.LEAGUE_K_PA, int(reg_kmod))
         if use_kwhiff and whiff_map and league_whiff:
             implied = E.swstr_implied_k(whiff_map.get(pitcher.mlbam_id), league_whiff)
             if implied:
@@ -439,7 +445,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
                 h_pa * ha, b.pa, p_h_bf, max(opp_pitcher.bf, 1),
                 b.runs_per_pa * ha, b.rbi_per_pa * ha, opp_pitcher.r_per_bf,
                 line=default_line, side="Over", expected_pa=total_pa,
-                park_hits=pmult, park_runs=park_runs, reg_k=int(reg_k), sp_share=this_share,
+                park_hits=pmult, park_runs=park_runs, reg_k=int(reg_hrr), sp_share=this_share,
                 r_ctx=_r_ctx, rbi_ctx=_rbi_ctx, tto=_tto)
             p_cover = _calibrate(p_cover)
             rows.append({
@@ -495,9 +501,9 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
             if raw_b and raw_p:
                 b_adj = b_rate / b_rate0 if b_rate0 else 1.0
                 p_adj = p_rate / p_rate0 if p_rate0 else 1.0
-                ber = {ev: E.regress(raw_b[ev], b_n, E.LEAGUE_EVENT_RATES[ev], int(reg_k)) * b_adj
+                ber = {ev: E.regress(raw_b[ev], b_n, E.LEAGUE_EVENT_RATES[ev], int(reg_tb)) * b_adj
                        for ev in raw_b}
-                per = {ev: E.regress(raw_p[ev], max(opp_pitcher.bf, 1), E.LEAGUE_EVENT_RATES[ev], int(reg_k)) * p_adj
+                per = {ev: E.regress(raw_p[ev], max(opp_pitcher.bf, 1), E.LEAGUE_EVENT_RATES[ev], int(reg_tb)) * p_adj
                        for ev in raw_p}
         inp = E.ProjectionInput(
             batter_tb_per_pa=b_rate, batter_pa_sample=b_n,
@@ -505,7 +511,7 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
             line=default_line, side="Over",
             expected_pa=total_pa, park_mult=pmult,
             shares=ht, sp_share=this_share, bullpen_rate=bullpen_rate,
-            league=league_rate, reg_k=int(reg_k),
+            league=league_rate, reg_k=int(reg_tb),
             batter_event_rates=ber, pitcher_event_rates=per,
             park_event_mult=park_ev,
         )
