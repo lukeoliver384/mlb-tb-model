@@ -696,6 +696,22 @@ with tab_bet:
             "Wx": st.column_config.TextColumn("Weather"),
         })
 
+    if STAT == "K":
+        with st.expander("Strikeout projection detail (diagnose over/under-projection)"):
+            _kcols = [c for c in ["Batter", "_p_rate", "_exp_pa", "_matchup", proj_col] if c in df.columns]
+            _kd = df[_kcols].copy()
+            _kd = _kd.rename(columns={"Batter": "Pitcher", "_p_rate": "Season K/BF",
+                                      "_exp_pa": "BF faced", "_matchup": "Eff K/BF", proj_col: "Proj Ks"})
+            st.dataframe(_kd.sort_values("Proj Ks", ascending=False), use_container_width=True, hide_index=True,
+                         column_config={
+                             "Season K/BF": st.column_config.NumberColumn("Season K/BF", format="%.3f"),
+                             "Eff K/BF": st.column_config.NumberColumn("Eff K/BF (used)", format="%.3f"),
+                             "BF faced": st.column_config.NumberColumn("BF faced", format="%.1f"),
+                             "Proj Ks": st.column_config.NumberColumn("Proj Ks", format="%.2f")})
+            st.caption("Read it like this: if **Season K/BF** clearly differs between pitchers but **Eff K/BF** "
+                       "is nearly the same for everyone, the pitcher's rate is being washed toward league average — "
+                       "lower the **Regression K (PA)** slider (Model & matchup), or turn off the SwStr blend to test.")
+
     # --- Why the strong picks (collapsed) ---
     def _summary(row):
         p_over = float(row["P(Over)"])
