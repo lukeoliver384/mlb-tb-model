@@ -430,12 +430,17 @@ def project_side(batters, opp_pitcher, venue, wmult=None, batter_is_home=False, 
                                        savant_bat.get(b.mlbam_id, {}).get("xwoba", 0.320))
             park_runs = pmult * (wmult.get("HR", 1.0) if wmult else 1.0)
             _r_ctx, _rbi_ctx = PF.lineup_run_context(b.order, lineup_ctx)
+            _tto = 1.0
+            if opp_pitcher.bf_per_start > 0:
+                _sppa = E.pa_vs_starter(b.order, opp_pitcher.bf_per_start, total_pa)
+                if _sppa > 0:
+                    _tto = E.tto_weighted(b.order, opp_pitcher.bf_per_start, total_pa, E.TTO_TB_MULT) / _sppa
             lam, p_cover = E.project_hrr(
                 h_pa * ha, b.pa, p_h_bf, max(opp_pitcher.bf, 1),
                 b.runs_per_pa * ha, b.rbi_per_pa * ha, opp_pitcher.r_per_bf,
                 line=default_line, side="Over", expected_pa=total_pa,
                 park_hits=pmult, park_runs=park_runs, reg_k=int(reg_k), sp_share=this_share,
-                r_ctx=_r_ctx, rbi_ctx=_rbi_ctx)
+                r_ctx=_r_ctx, rbi_ctx=_rbi_ctx, tto=_tto)
             p_cover = _calibrate(p_cover)
             rows.append({
                 "Batter": b.name, "Slot": b.order, "B": b.bats,
