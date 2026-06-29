@@ -344,9 +344,9 @@ def project_pitcher_k(pitcher, lineup):
     total_k = bf_used = 0.0
     for b in lineup:
         k_pa, k_n = b.k_per_pa_vs(pitcher.throws)
-        bk = E.regress(k_pa, k_n, E.LEAGUE_K_PA, int(reg_k))
+        bk = E.regress(k_pa, k_n, E.LEAGUE_K_PA, E.REG_KMODEL)   # K stabilizes fast; baked-in, not the global slider
         p_k_bf, p_k_n = pitcher.k_per_bf_vs(b.bats) if use_splits else (pitcher.k_per_bf, pitcher.bf)
-        pk = E.regress(p_k_bf, p_k_n, E.LEAGUE_K_PA, int(reg_k))
+        pk = E.regress(p_k_bf, p_k_n, E.LEAGUE_K_PA, E.REG_KMODEL)
         if use_kwhiff and whiff_map and league_whiff:
             implied = E.swstr_implied_k(whiff_map.get(pitcher.mlbam_id), league_whiff)
             if implied:

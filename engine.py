@@ -29,7 +29,8 @@ LEAGUE_R_PER_BF = 0.118
 LEAGUE_K_PA = 0.225   # league strikeouts per PA (updated live)
 HRR_DISPERSION = 1.5   # >1 = overdispersed (more 0-1 games than Poisson); tune via calibration
 K_DISPERSION = 1.4    # pitcher Ks: workload (IP/BF) variance widens tails vs Poisson; tune via calibration
-REG_K_PA = 175             # sheet E12 (regression constant, in PA)
+REG_K_PA = 175             # sheet E12 (regression constant, in PA) — TB/HRR only
+REG_KMODEL = 70            # K rates stabilize fast (~70 BF/PA); baked-in for the K prop, not slider-driven
 
 
 # --------------------------------------------------------------------------- #
