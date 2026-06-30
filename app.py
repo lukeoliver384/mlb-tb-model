@@ -109,7 +109,7 @@ with st.sidebar:
         kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, step=0.05, key="ui_kelly",
                                help="0.25 = quarter Kelly.")
         conf_stake = st.checkbox("Scale stakes by confidence", key="ui_confstake",
-                                 help="Shrink the Kelly stake for low-confidence (thin-sample) picks: 5★ full, 4★ 0.7, 3★ 0.45, 2★ 0.25, 1★ 0.1.")
+                                 help="Shrink the Kelly stake for thinner-sample picks: 5★ full, 4★ 0.9, 3★ 0.7, 2★ 0.5, 1★ 0.25. Tuned so 4★ (the realistic top) stays near full size.")
         max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, step=0.5, key="ui_maxstake")
         conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, step=0.05, key="ui_shrink")
         try:
@@ -974,7 +974,7 @@ with tab_bet:
 
     results = []
     _confmap = {(r["Game"], r["Batter"]): int(r.get("Conf", 3)) for _, r in df.iterrows()} if (df is not None and not df.empty and "Conf" in df.columns) else {}
-    _CONF_FACTOR = {5: 1.0, 4: 0.7, 3: 0.45, 2: 0.25, 1: 0.1}
+    _CONF_FACTOR = {5: 1.0, 4: 0.9, 3: 0.7, 2: 0.5, 1: 0.25}
     for _, row in edited.iterrows():
         over_odds, under_odds = _num(row["Over odds"]), _num(row["Under odds"])
         if over_odds is None and under_odds is None:
