@@ -133,6 +133,7 @@ class Batter:
     mlbam_id: int
     name: str
     bats: str = ""             # "L", "R", "S"
+    expected: bool = False     # True = from a PROJECTED lineup (last game), not today's confirmed
     order: int = 0             # batting-order slot 1-9
     pa: float = 0.0
     tb: float = 0.0
@@ -286,20 +287,55 @@ def get_schedule(date: str) -> list[Matchup]:
     return out
 
 
+def _last_lineup_for_team(team_id: int):
+    """(battingOrder, players) from the team's most recent FINAL game — used as a PROJECTED
+    lineup before today's is posted. (None, None) if unavailable."""
+    try:
+        today = dt.date.today()
+        sched = _get(f"{STATSAPI}/schedule", sportId=1, teamId=team_id,
+                     startDate=(today - dt.timedelta(days=12)).isoformat(),
+                     endDate=(today - dt.timedelta(days=1)).isoformat())
+        finals = []
+        for d in sched.get("dates", []):
+            for g in d.get("games", []):
+                if (g.get("status", {}) or {}).get("abstractGameState") == "Final":
+                    finals.append((d.get("date", ""), g))
+        if not finals:
+            return None, None
+        finals.sort(key=lambda x: x[0])
+        g = finals[-1][1]
+        side = "home" if g["teams"]["home"]["team"]["id"] == team_id else "away"
+        box = _get(f"{STATSAPI.replace('/v1','')}/v1/game/{g['gamePk']}/boxscore")
+        t = box["teams"][side]
+        return (t.get("battingOrder", []) or None), t.get("players", {})
+    except Exception:
+        return None, None
+
+
 def get_lineup(game_pk: int, side: str) -> list[Batter]:
-    """Confirmed batting order for a game side ('home'/'away'). Empty if not posted."""
+    """Today's confirmed batting order. If not posted yet, falls back to the team's most
+    recent game's order (flagged expected=True) so projections can run early."""
     box = _get(f"{STATSAPI.replace('/v1','')}/v1/game/{game_pk}/boxscore")
     team = box["teams"][side]
     batters_ids = team.get("battingOrder", [])
+    players = team.get("players", {})
+    expected = False
+    if not batters_ids:
+        tid = (team.get("team", {}) or {}).get("id")
+        if tid:
+            fb_ids, fb_players = _last_lineup_for_team(tid)
+            if fb_ids:
+                batters_ids, players, expected = fb_ids, fb_players, True
     out = []
     for i, pid in enumerate(batters_ids[:9], start=1):
-        p = team["players"].get(f"ID{pid}", {})
+        p = players.get(f"ID{pid}", {})
         person = p.get("person", {})
         out.append(Batter(
             mlbam_id=pid,
             name=person.get("fullName", str(pid)),
             bats=p.get("batSide", {}).get("code", ""),
             order=i,
+            expected=expected,
         ))
     return out
 
@@ -354,6 +390,77 @@ def fill_batter_stats(b: Batter, season: int) -> Batter:
     except Exception:
         pass
     return b
+
+
+# --------------------------------------------------------------------------- #
+# ESPN public API: records, recent form, betting odds, headlines (game-day tab) #
+# --------------------------------------------------------------------------- #
+_ESPN_ALIAS = {"AZ": "ARI", "CHW": "CWS", "SDP": "SD", "SFG": "SF", "TBR": "TB",
+               "KCR": "KC", "WSN": "WSH", "WAS": "WSH"}
+
+def _team_key(abbr: str) -> str:
+    a = (abbr or "").upper().strip()
+    return _ESPN_ALIAS.get(a, a)
+
+def espn_mlb_games(date: str) -> dict:
+    """ESPN scoreboard for a date (YYYY-MM-DD). Returns {team_key: game_context} keyed by
+    BOTH teams in each game, so the app can look up by either side. Empty on failure."""
+    out = {}
+    try:
+        d = date.replace("-", "")
+        url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates={d}"
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        for ev in r.json().get("events", []):
+            comp = (ev.get("competitions") or [{}])[0]
+            sides = {}
+            for c in comp.get("competitors", []):
+                ha = c.get("homeAway", "")
+                t = c.get("team", {})
+                recmap = {}
+                for rr in c.get("records", []):
+                    recmap[(rr.get("type") or rr.get("name") or "").lower()] = rr.get("summary", "")
+                sides[ha] = {
+                    "abbr": t.get("abbreviation", ""),
+                    "name": t.get("displayName", ""),
+                    "record": recmap.get("total", recmap.get("overall", "")),
+                    "home_rec": recmap.get("home", ""),
+                    "away_rec": recmap.get("road", recmap.get("away", "")),
+                    "form": recmap.get("last ten games", recmap.get("lastten", "")),
+                }
+            odds = ""
+            o = comp.get("odds", [])
+            if o:
+                odds = o[0].get("details", "") or ""
+                ou = o[0].get("overUnder", "")
+                if ou:
+                    odds = (odds + f" · O/U {ou}").strip(" ·")
+            ctx = {
+                "away": sides.get("away", {}), "home": sides.get("home", {}),
+                "venue": (comp.get("venue", {}) or {}).get("fullName", ""),
+                "status": ((ev.get("status", {}) or {}).get("type", {}) or {}).get("shortDetail", ""),
+                "odds": odds,
+            }
+            for side in ("away", "home"):
+                k = _team_key(sides.get(side, {}).get("abbr", ""))
+                if k:
+                    out[k] = ctx
+    except Exception:
+        pass
+    return out
+
+def espn_mlb_headlines(limit: int = 10) -> list:
+    """Recent MLB news headlines from ESPN. Empty on failure."""
+    try:
+        url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/news"
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        out = []
+        for a in r.json().get("articles", [])[:limit]:
+            out.append({"headline": a.get("headline", ""), "desc": a.get("description", "")})
+        return out
+    except Exception:
+        return []
 
 
 def avg_bf_per_start(pid: int, season: int):

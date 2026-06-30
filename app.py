@@ -81,7 +81,7 @@ def _seed(k, default):
 
 _seed("ui_prop", "Total Bases")
 _seed("ui_line", 1.5); _seed("ui_tossup", 0.03); _seed("ui_minedge", 0.05)
-_seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
+_seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0); _seed("ui_confstake", True)
 _seed("ui_regtb", int(E.REG_K_PA)); _seed("ui_reghrr", int(E.REG_K_PA)); _seed("ui_regkmod", int(getattr(E, "REG_KMODEL", 70)))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
@@ -108,6 +108,8 @@ with st.sidebar:
         min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, step=0.01, key="ui_minedge")
         kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, step=0.05, key="ui_kelly",
                                help="0.25 = quarter Kelly.")
+        conf_stake = st.checkbox("Scale stakes by confidence", key="ui_confstake",
+                                 help="Shrink the Kelly stake for low-confidence (thin-sample) picks: 5★ full, 4★ 0.7, 3★ 0.45, 2★ 0.25, 1★ 0.1.")
         max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, step=0.5, key="ui_maxstake")
         conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, step=0.05, key="ui_shrink")
         try:
@@ -180,7 +182,7 @@ with st.sidebar:
         w_kwhiff = st.slider("Weight on SwStr-implied K", 0.0, 1.0, step=0.05, key="ui_wkwhiff", disabled=not use_kwhiff)
 
 # Persist sidebar settings (one write only when something changed)
-_uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
+_uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink", "ui_confstake",
            "ui_regtb", "ui_reghrr", "ui_regkmod", "ui_splits", "ui_homeaway", "ui_components", "ui_calib", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_tbtemp", "ui_hrrtemp", "ui_ktemp",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
@@ -672,7 +674,7 @@ st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
 # --------------------------------------------------------------------------- #
 # Summary + projections                                                       #
 # --------------------------------------------------------------------------- #
-tab_bet, tab_perf, tab_paper, tab_clv = st.tabs(["📊 Projections & Odds", "📈 Performance", "💰 Paper Bankroll", "🎯 Closing Lines (CLV)"])
+tab_bet, tab_perf, tab_paper, tab_clv, tab_gameday = st.tabs(["📊 Projections & Odds", "📈 Performance", "💰 Paper Bankroll", "🎯 Closing Lines (CLV)", "📰 Game Day"])
 
 with tab_bet:
     m1, m2, m3, m4 = st.columns(4)
@@ -684,6 +686,12 @@ with tab_bet:
 
     st.subheader("Projections")
     st.caption(f"Every hitter vs the opposing starter, sorted by projected {STAT}. Add odds below for edges.")
+    _exp_n = sum(1 for _mu in slate for _b in (_mu.home_lineup + _mu.away_lineup)
+                 if getattr(_b, "expected", False))
+    if _exp_n:
+        st.warning(f"⚠ {_exp_n} hitters are from PROJECTED lineups (each team's last game), not today's "
+                   "confirmed order. Get your picks in now, then reload when official lineups post to update "
+                   "the changed spots (usually 7–9).")
     view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
                  "vsSP%", proj_col, "P(Over)", "Lean", "Lean %", "Fair Over odds", "Conf", "Venue", "Wx"]
     dfv = df[view_cols].sort_values(proj_col, ascending=False).copy()
@@ -965,6 +973,8 @@ with tab_bet:
             return None
 
     results = []
+    _confmap = {(r["Game"], r["Batter"]): int(r.get("Conf", 3)) for _, r in df.iterrows()} if (df is not None and not df.empty and "Conf" in df.columns) else {}
+    _CONF_FACTOR = {5: 1.0, 4: 0.7, 3: 0.45, 2: 0.25, 1: 0.1}
     for _, row in edited.iterrows():
         over_odds, under_odds = _num(row["Over odds"]), _num(row["Under odds"])
         if over_odds is None and under_odds is None:
@@ -995,7 +1005,8 @@ with tab_bet:
                 _p_size = (1 - conf_shrink) * p_model + conf_shrink * _mkt
             else:
                 _p_size = p_model
-            kel = min(E.kelly_fraction(_p_size, odds) * kelly_mult, max_stake / 100.0)
+            _cf = _CONF_FACTOR.get(_confmap.get((row["Game"], row["Batter"]), 3), 0.45) if conf_stake else 1.0
+            kel = min(E.kelly_fraction(_p_size, odds) * kelly_mult * _cf, max_stake / 100.0)
             results.append({
                 "Game": row["Game"], "Batter": row["Batter"], "Line": line,
                 "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
@@ -1462,3 +1473,48 @@ with tab_clv:
                            help="Share of bets that beat the close. Aim well above 50%.")
             else:
                 st.caption("Enter closing odds above to see CLV metrics.")
+
+
+with tab_gameday:
+    st.subheader("Game Day")
+    st.caption("Matchup, records, recent form, betting odds (ESPN), and your model's angle for each game.")
+    if not slate:
+        st.info("Load a slate to see game summaries.")
+    else:
+        if st.session_state.get("espn_date") != date.isoformat():
+            st.session_state["espn_cache"] = (D.espn_mlb_games(date.isoformat()), D.espn_mlb_headlines(12))
+            st.session_state["espn_date"] = date.isoformat()
+        _eg, _news = st.session_state.get("espn_cache", ({}, []))
+        for mu in slate:
+            _gkey = f"{mu.away} @ {mu.home}"
+            _ec = _eg.get(D._team_key(mu.home)) or _eg.get(D._team_key(mu.away)) or {}
+            st.markdown(f"### {mu.away} @ {mu.home}")
+            _meta = [x for x in [mu.venue, _ec.get("status", ""), _ec.get("odds", "")] if x]
+            if _meta:
+                st.caption(" · ".join(_meta))
+            _ah, _hh = _ec.get("away", {}), _ec.get("home", {})
+            _c1, _c2 = st.columns(2)
+            with _c1:
+                st.markdown(f"**{mu.away}**" + (f"  ({_ah.get('record','')})" if _ah.get("record") else ""))
+                if _ah.get("form"):
+                    st.caption(f"Last 10: {_ah['form']}")
+                st.caption(f"SP: {mu.away_pitcher.name if mu.away_pitcher else 'TBD'}")
+            with _c2:
+                st.markdown(f"**{mu.home}**" + (f"  ({_hh.get('record','')})" if _hh.get("record") else ""))
+                if _hh.get("form"):
+                    st.caption(f"Last 10: {_hh['form']}")
+                st.caption(f"SP: {mu.home_pitcher.name if mu.home_pitcher else 'TBD'}")
+            _gd = df[df["Game"] == _gkey] if (df is not None and not df.empty and "Game" in df.columns) else None
+            if _gd is not None and not _gd.empty and proj_col in _gd.columns:
+                _cols = [c for c in ["Batter", proj_col, "P(Over)", "Lean"] if c in _gd.columns]
+                _top = _gd.sort_values(proj_col, ascending=False).head(5)[_cols]
+                st.caption(f"Model's top {STAT} projections in this game:")
+                st.dataframe(_top, hide_index=True, use_container_width=True)
+            st.divider()
+        if _news:
+            with st.expander("MLB headlines (ESPN)"):
+                for _n in _news:
+                    st.markdown(f"**{_n.get('headline','')}**")
+                    if _n.get("desc"):
+                        st.caption(_n["desc"])
+        st.caption("Next: AI-written matchup narratives that synthesize all of the above — they need an LLM API key in the app's secrets (your choice of provider).")
