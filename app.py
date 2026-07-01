@@ -1362,11 +1362,6 @@ with tab_paper:
         if _pstart <= 0:
             _pstart = 235.0
         st.caption(f"Starting bankroll ${_pstart:,.0f} (set it in the Performance tab).")
-        _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
-                                     odds_lookup=(_olu if _use_real else None),
-                                     real_only=(_use_real and _real_only),
-                                     stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP, start_units=_pstart,
-                                     max_frac=float(max_stake) / 100.0)
         _cov = []
         for _cpp, _clbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
             _csub = _log[_log["prop"].astype(str).str.upper() == _cpp] if (_log is not None and not _log.empty) else _log
@@ -1374,20 +1369,26 @@ with tab_paper:
             _cgr = int(_csub["graded"].astype(str).isin(["1", "1.0", "True"]).sum()) if (_csub is not None and not _csub.empty) else 0
             _cps, _ = T.paper_sim(_csub, odds=int(_po), only_plus_ev=False, odds_lookup=_olu, real_only=True)
             _cov.append({"Prop": _clbl, "In log": _ctot, "Graded": _cgr, "Priced (real odds)": _cps.get("n", 0)})
-        st.caption("Coverage — graded projections logged vs how many you've priced (paper uses priced ones):")
+        st.caption("Coverage — graded projections logged vs how many you've priced:")
         st.dataframe(pd.DataFrame(_cov), hide_index=True, use_container_width=True)
         if st.button("↻ Refresh from sheet", key="paper_refresh"):
             _invalidate_tracker_cache()
             st.rerun()
         if _log is not None and not _log.empty:
-            _allvc = (_log["prop"].astype(str).str.upper().replace("", "(blank)").value_counts().to_dict())
             _gdf = _log[_log["graded"].astype(str).isin(["1", "1.0", "True"])]
             _gvc = (_gdf["prop"].astype(str).str.upper().replace("", "(blank)").value_counts().to_dict()) if not _gdf.empty else {}
-            st.caption(f"Diagnostic — all rows by prop: {_allvc} · graded by prop: {_gvc} · "
-                       f"total rows {len(_log)}, graded {len(_gdf)}")
-        else:
-            st.caption("Diagnostic: the projection log (projections worksheet) reads as empty in this session.")
-        if _psum.get("n"):
+            st.caption(f"Diagnostic — graded by prop: {_gvc} · total rows {len(_log)}, graded {len(_gdf)}")
+
+        def _render_paper(_gm2, _label):
+            st.markdown(f"#### {_label}")
+            _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
+                                         odds_lookup=(_olu if _use_real else None),
+                                         real_only=(_use_real and _real_only),
+                                         stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP,
+                                         start_units=_pstart, max_frac=float(max_stake) / 100.0, mode=_gm2)
+            if not _psum.get("n"):
+                st.caption("No graded picks for this view yet (value view needs both over/under prices entered).")
+                return
             _q1, _q2, _q3, _q4 = st.columns(4)
             _q1.metric("Paper bets", _psum["n"])
             _q2.metric("Hit rate", f"{_psum['hit_rate']*100:.1f}%",
@@ -1395,44 +1396,34 @@ with tab_paper:
             _q3.metric("ROI", f"{_psum['roi']*100:+.1f}%")
             if _sm == "kelly":
                 _q4.metric("Growth", f"{_psum.get('growth', 0)*100:+.1f}%",
-                           help=f"Fixed-fraction Kelly off your starting bankroll (no compounding), {kelly_mult:g}x.")
+                           help=f"Fixed-fraction Kelly off starting bankroll, {kelly_mult:g}x.")
             else:
                 _q4.metric("$ P/L", f"${_psum['profit']:+,.0f}")
-            if _use_real:
-                st.caption(f"{_psum.get('n_real', 0)} of {_psum['n']} picks used your real entered odds; "
-                           f"the rest used {int(_po):+d}.")
             if not _pcurve.empty:
-                st.line_chart(_pcurve.set_index("n")["bankroll"], height=240,
-                              x_label="paper bets", y_label="$")
-            _pp_rows = []
-            _pp_curves = []
+                st.line_chart(_pcurve.set_index("n")["bankroll"], height=240, x_label="paper bets", y_label="$")
+            _pp_rows, _pp_curves = [], []
             for _pp, _lbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
                 _sub = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
                 _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
                                       odds_lookup=(_olu if _use_real else None),
                                       real_only=(_use_real and _real_only),
-                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP, start_units=_pstart,
-                                     max_frac=float(max_stake) / 100.0)
+                                      stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP,
+                                      start_units=_pstart, max_frac=float(max_stake) / 100.0, mode=_gm2)
                 if _s.get("n"):
-                    _pp_rows.append({"Prop": _lbl, "Bets": _s["n"],
-                                     "Hit%": round(_s["hit_rate"]*100, 1),
-                                     "Break-even%": round(_s["breakeven"]*100, 1),
-                                     "ROI%": round(_s["roi"]*100, 1),
+                    _pp_rows.append({"Prop": _lbl, "Bets": _s["n"], "Hit%": round(_s["hit_rate"]*100, 1),
+                                     "Break-even%": round(_s["breakeven"]*100, 1), "ROI%": round(_s["roi"]*100, 1),
                                      "$ P/L": round(_s["profit"], 0)})
                     if not _sc.empty:
                         _pp_curves.append((_lbl, _s, _sc))
             if _pp_rows:
-                st.markdown("**By prop**")
                 st.dataframe(pd.DataFrame(_pp_rows), hide_index=True, use_container_width=True)
             for _lbl, _s, _sc in _pp_curves:
-                st.caption(f"{_lbl} — paper bankroll  ·  {_s['n']} bets, "
-                           f"{_s['hit_rate']*100:.1f}% hit, ROI {_s['roi']*100:+.1f}%")
-                st.line_chart(_sc.set_index("n")["bankroll"], height=200,
-                              x_label="paper bets", y_label="$")
-            st.caption("Uses your real entered odds where available (else the fallback price). Picks you never "
-                       "priced use the fallback, so coverage grows as you log more odds.")
-        else:
-            st.caption("No graded projections yet — log and grade some slates first.")
+                st.caption(f"{_lbl}: {_s['n']} bets, {_s['hit_rate']*100:.1f}% hit, ROI {_s['roi']*100:+.1f}%")
+                st.line_chart(_sc.set_index("n")["bankroll"], height=180, x_label="paper bets", y_label="$")
+
+        _render_paper("lean", "① Betting the model's pick — lean (over/under call)")
+        st.divider()
+        _render_paper("value", "② Betting the value side — the +EV side (how you actually bet)")
 
 
 with tab_clv:

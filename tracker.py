@@ -716,19 +716,15 @@ def avg_realized_odds(bets):
 
 
 def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=None,
-              real_only=False, stake_mode="flat", kelly_mult=0.25, max_frac=0.10, temp=1.0, temp_map=None):
-    """Hypothetical paper bankroll betting the model's lean on graded projections.
-
-      odds_lookup : {(iso_date, PROP, batter): {over, under}} -> use your REAL entered
-                    price per pick for its leaned side; else fall back to `odds`.
-      real_only   : with odds_lookup, skip picks you never priced (don't use fallback).
-      stake_mode  : "flat" = 1 unit each (best for measuring edge); "kelly" = compounding
-                    fractional-Kelly stakes (realistic bankroll growth).
-
-    Returns (summary, curve). summary: n, wins, hit_rate, breakeven(avg), roi
-    (profit/total staked), growth (final/start-1), profit, final, n_real.
-    """
+              real_only=False, stake_mode="flat", kelly_mult=0.25, max_frac=0.10,
+              temp=1.0, temp_map=None, mode="lean"):
+    """Paper bankroll over graded projections.
+      mode="lean"  -> bet the model's leaned side (P(over) vs 50%), +EV-filtered.
+      mode="value" -> bet whichever side is +EV at the entered price (over OR under),
+                      regardless of the lean. Requires entered odds (uses odds_lookup).
+    Returns (summary, curve)."""
     import pandas as pd
+    import math as _m
     empty = pd.DataFrame(columns=["n", "bankroll"])
     if log is None or log.empty:
         return {"n": 0}, empty
@@ -741,42 +737,61 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
     assumed = _american_to_decimal(odds)
     if not assumed:
         return {"n": 0}, empty
+
+    def _cal(pp, t):
+        if not t or t == 1.0 or not (0 < pp < 1):
+            return pp
+        return 1.0 / (1.0 + _m.exp(-(_m.log(pp / (1 - pp)) / t)))
+
     i = wins = n_real = 0
     profit = staked = be_sum = 0.0
     bk = float(start_units)
     curve = []
     for _, r in g.iterrows():
         p = float(r["p"]); oh = float(r["oh"])
-        conf = max(p, 1 - p); lean_over = p >= 0.5
         prop_u = str(r.get("prop", "")).upper()
-        dec = None
-        if odds_lookup:
-            key = (_iso(r.get("date")), prop_u, str(r.get("batter", "")).strip())
-            rec = odds_lookup.get(key)
-            if rec:
-                dec = _american_to_decimal(rec.get("over") if lean_over else rec.get("under"))
-        used_real = dec is not None
-        if dec is None:
-            if real_only:
+        rec = odds_lookup.get((_iso(r.get("date")), prop_u, str(r.get("batter", "")).strip())) if odds_lookup else None
+
+        if mode == "value":
+            do = _american_to_decimal(rec.get("over")) if rec else None
+            du = _american_to_decimal(rec.get("under")) if rec else None
+            ev_o = (p * (do - 1) - (1 - p)) if do else None
+            ev_u = ((1 - p) * (du - 1) - p) if du else None
+            pick = None
+            if ev_o is not None and (ev_u is None or ev_o >= ev_u) and ev_o > 0:
+                pick = (True, do, p)
+            elif ev_u is not None and ev_u > 0:
+                pick = (False, du, 1 - p)
+            if pick is None:
                 continue
-            dec = assumed
-        be = 1.0 / dec
-        if only_plus_ev and conf < be:
-            continue
-        win = (lean_over) == (oh > 0.5)
-        if stake_mode == "kelly":
-            conf_k = conf
-            _t = (temp_map.get(prop_u, temp) if temp_map else temp)
-            if _t and _t != 1.0 and 0 < p < 1:
-                import math as _m
-                _pc = 1.0 / (1.0 + _m.exp(-(_m.log(p / (1 - p)) / _t)))
-                conf_k = max(_pc, 1 - _pc)   # per-prop calibrated confidence -> realistic stake
-            b = dec - 1.0
-            f = ((b * conf_k - (1 - conf_k)) / b) if b > 0 else 0.0
-            f = min(max(0.0, f) * kelly_mult, max_frac)
-            stake = f * start_units   # fixed fraction of STARTING bankroll (no compounding)
+            bet_over, dec, pbet = pick
+            used_real = True
+            win = bet_over == (oh > 0.5)
         else:
-            stake = 0.01 * start_units   # flat unit = 1% of starting bankroll
+            pbet = max(p, 1 - p)
+            bet_over = p >= 0.5
+            dec = None
+            if rec:
+                dec = _american_to_decimal(rec.get("over") if bet_over else rec.get("under"))
+            used_real = dec is not None
+            if dec is None:
+                if real_only:
+                    continue
+                dec = assumed
+            if only_plus_ev and pbet < 1.0 / dec:
+                continue
+            win = bet_over == (oh > 0.5)
+
+        be = 1.0 / dec
+        if stake_mode == "kelly":
+            _t = (temp_map.get(prop_u, temp) if temp_map else temp)
+            pk = _cal(pbet, _t)
+            b = dec - 1.0
+            f = ((b * pk - (1 - pk)) / b) if b > 0 else 0.0
+            f = min(max(0.0, f) * kelly_mult, max_frac)
+            stake = f * start_units
+        else:
+            stake = 0.01 * start_units
         step = stake * (dec - 1.0) if win else -stake
         i += 1
         wins += 1 if win else 0
@@ -789,9 +804,8 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
     if i == 0:
         return {"n": 0, "breakeven": 1.0 / assumed}, empty
     return ({"n": i, "wins": wins, "hit_rate": wins / i, "breakeven": be_sum / i,
-             "roi": (profit / staked) if staked else 0.0,
-             "growth": (bk / start_units - 1.0), "profit": profit, "final": bk,
-             "n_real": n_real, "odds": odds, "stake_mode": stake_mode},
+             "roi": (profit / staked) if staked else 0.0, "growth": (bk / start_units - 1.0),
+             "profit": profit, "final": bk, "n_real": n_real, "odds": odds, "stake_mode": stake_mode},
             pd.DataFrame(curve))
 
 
