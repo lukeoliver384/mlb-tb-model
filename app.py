@@ -1271,8 +1271,8 @@ with tab_perf:
         else:
             st.caption(f"No graded {label} bets yet.")
 
-    _tabs = st.tabs(["Total Bases", "Hits + Runs + RBIs"])
-    for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR"], ["Total Bases", "H+R+RBI"]):
+    _tabs = st.tabs(["Total Bases", "Hits + Runs + RBIs", "Pitcher Strikeouts"])
+    for _tab, _pp, _lbl in zip(_tabs, ["TB", "HRR", "K"], ["Total Bases", "H+R+RBI", "Pitcher Ks"]):
         with _tab:
             _pl = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
             _pb = _bets[_bets["prop"].astype(str).str.upper() == _pp] if not _bets.empty else _bets
