@@ -1379,13 +1379,19 @@ with tab_paper:
             _gvc = (_gdf["prop"].astype(str).str.upper().replace("", "(blank)").value_counts().to_dict()) if not _gdf.empty else {}
             st.caption(f"Diagnostic — graded by prop: {_gvc} · total rows {len(_log)}, graded {len(_gdf)}")
 
-        def _render_paper(_gm2, _label):
+        def _render_paper(_gm2, _label, _evf=None):
             st.markdown(f"#### {_label}")
-            _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_pev,
-                                         odds_lookup=(_olu if _use_real else None),
-                                         real_only=(_use_real and _real_only),
-                                         stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP,
-                                         start_units=_pstart, max_frac=float(max_stake) / 100.0, mode=_gm2)
+            _ev = _pev if _evf is None else _evf
+            try:
+                _psum, _pcurve = T.paper_sim(_log, odds=int(_po), only_plus_ev=_ev,
+                                             odds_lookup=(_olu if _use_real else None),
+                                             real_only=(_use_real and _real_only),
+                                             stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP,
+                                             start_units=_pstart, max_frac=float(max_stake) / 100.0, mode=_gm2)
+            except TypeError:
+                st.error("⚠ The server's tracker.py is out of date (paper_sim is missing the 'mode' argument). "
+                         "Re-upload tracker.py to GitHub and reboot the app (Manage app → Reboot).")
+                return
             if not _psum.get("n"):
                 st.caption("No graded picks for this view yet (value view needs both over/under prices entered).")
                 return
@@ -1404,7 +1410,7 @@ with tab_paper:
             _pp_rows, _pp_curves = [], []
             for _pp, _lbl in [("TB", "Total Bases"), ("HRR", "H+R+RBI"), ("K", "Pitcher Ks")]:
                 _sub = _log[_log["prop"].astype(str).str.upper() == _pp] if not _log.empty else _log
-                _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_pev,
+                _s, _sc = T.paper_sim(_sub, odds=int(_po), only_plus_ev=_ev,
                                       odds_lookup=(_olu if _use_real else None),
                                       real_only=(_use_real and _real_only),
                                       stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP,
@@ -1424,6 +1430,8 @@ with tab_paper:
         _render_paper("lean", "① Betting the model's pick — lean (over/under call)")
         st.divider()
         _render_paper("value", "② Betting the value side — the +EV side (how you actually bet)")
+        st.divider()
+        _render_paper("lean", "③ Straight model pick — every game, no EV/price filter (raw model edge)", _evf=False)
 
 
 with tab_clv:
