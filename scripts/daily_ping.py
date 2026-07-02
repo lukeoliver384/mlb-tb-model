@@ -96,6 +96,7 @@ def project_batter(b, opp_pitcher, venue, savant_bat, savant_pit, batter_is_home
     return {
         "batter": b.name, "slot": b.order, "pitcher": opp_pitcher.name,
         "p_over": r.p_cover, "conf": conf,
+        "expected": bool(getattr(b, "expected", False)),
     }
 
 
@@ -143,13 +144,22 @@ def format_message(date_str, picks, n_games):
         return f"**{date_str}** — {n_games} games loaded, but no lean cleared {LEAN_THRESHOLD:.0%} yet " \
                f"(lineups may not be posted). Try again closer to first pitch."
     lines = [f"**MLB TB Model — {date_str}** ({n_games} games)\n"]
+    any_expected = False
     for p in picks:
         stars = "*" * p["conf"]
+        flag = ""
+        if p["expected"]:
+            flag = " (proj. lineup)"
+            any_expected = True
         lines.append(
             f"`{p['p_side']*100:4.1f}%` **{p['batter']}** {p['side']} {DEFAULT_LINE} TB "
-            f"— vs {p['pitcher']} ({p['game']}) [{stars}]"
+            f"— vs {p['pitcher']} ({p['game']}){flag} [{stars}]"
         )
-    lines.append("\n_Model leans only — no odds feed yet, so this isn't verified +EV. Price it yourself._")
+    if any_expected:
+        lines.append("\n_(proj. lineup) = today's official batting order isn't posted yet for that game — "
+                      "this used the team's last lineup as a placeholder. Re-check once it's confirmed, "
+                      "usually 3-4 hrs before first pitch._")
+    lines.append("_Model leans only — no odds feed yet, so this isn't verified +EV. Price it yourself._")
     return "\n".join(lines)
 
 

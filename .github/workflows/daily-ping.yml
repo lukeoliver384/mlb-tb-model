@@ -2,10 +2,14 @@ name: Daily slate ping
 
 on:
   schedule:
-    # 20:00 UTC = 4:00 PM EDT / 3:00 PM EST. GitHub cron is UTC-only (no DST
-    # awareness) and best-effort timed — it can run a few minutes late during
-    # GitHub's peak load. Adjust the hour below to change when it fires.
-    - cron: "0 20 * * *"
+    # Times below are ET (EDT, UTC-4, in effect through early Nov). GitHub
+    # cron is UTC-only — no DST awareness — so each offset shifts by an hour
+    # once EST (UTC-5) kicks back in; adjust then if it matters to you.
+    # Runs are also best-effort timed and can land a few minutes late during
+    # GitHub's peak load.
+    - cron: "30 13 * * *"   # 9:30 AM ET
+    - cron: "0 16 * * *"    # 12:00 PM ET
+    - cron: "0 20 * * *"    # 4:00 PM ET
   workflow_dispatch: {}
 
 jobs:
