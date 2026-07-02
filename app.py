@@ -713,7 +713,7 @@ if slate and (go or st.session_state.get("proj_df") is None or _proj_stale):
 
 
 
-df = st.session_state["proj_df"]
+df = st.session_state.get("proj_df")
 
 if df is not None and not df.empty:
     def _lean(row):
