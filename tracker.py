@@ -987,6 +987,33 @@ def apply_platt(p, A, B):
     return _sigmoid(A * x + B)
 
 
+def calibration_by_probability_platt(log: pd.DataFrame, A: float = 1.0, B: float = 0.0) -> pd.DataFrame:
+    """Same reliability-diagram shape as calibration_by_probability(), but with the
+    'calibrated' column run through Platt scaling (apply_platt) instead of a single
+    temperature. A preview tool — doesn't touch anything live."""
+    g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    if g.empty:
+        return pd.DataFrame()
+    g["p"] = pd.to_numeric(g["p_over"], errors="coerce")
+    g["oh"] = pd.to_numeric(g["over_hit"], errors="coerce")
+    g = g.dropna(subset=["p", "oh"])
+    if g.empty:
+        return pd.DataFrame()
+    g["pc"] = g["p"].apply(lambda p: apply_platt(p, A, B))
+    bins = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.01]
+    labels = ["0-10%", "10-20%", "20-30%", "30-40%", "40-50%",
+              "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"]
+    g["bucket"] = pd.cut(g["p"], bins=bins, labels=labels, right=False)
+    out = g.groupby("bucket", observed=True).agg(
+        n=("oh", "size"),
+        predicted=("p", "mean"),
+        calibrated=("pc", "mean"),
+        over_rate=("oh", "mean")).reset_index()
+    out["gap"] = out["over_rate"] - out["predicted"]
+    out["gap_cal"] = out["over_rate"] - out["calibrated"]
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Persistent settings (e.g. starting bankroll)                                #
 # --------------------------------------------------------------------------- #
