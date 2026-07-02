@@ -131,14 +131,17 @@ st.markdown(
     '<div style="display:flex;align-items:center;gap:14px;padding:2px 0 16px;'
     'margin-bottom:14px;border-bottom:1px solid #262C36;">'
     '<div style="width:44px;height:44px;border-radius:12px;flex:0 0 auto;'
-    'display:flex;align-items:center;justify-content:center;font-size:1.6rem;'
+    'display:flex;align-items:center;justify-content:center;'
     'background:linear-gradient(135deg,#1B2230 0%,#12161D 100%);'
-    'border:1px solid #2B3444;box-shadow:0 2px 8px rgba(0,0,0,0.25);">⚾</div>'
+    'border:1px solid #2B3444;box-shadow:0 2px 8px rgba(0,0,0,0.25);">'
+    '<svg width="24" height="24" viewBox="0 0 24 24" fill="none">'
+    '<rect x="3" y="13" width="4" height="8" rx="1.3" fill="#4C8DFF" opacity="0.5"/>'
+    '<rect x="10" y="9" width="4" height="12" rx="1.3" fill="#4C8DFF" opacity="0.78"/>'
+    '<rect x="17" y="4" width="4" height="17" rx="1.3" fill="#4C8DFF"/>'
+    '</svg></div>'
     '<div style="flex:1;">'
     '<div style="font-size:1.5rem;font-weight:680;letter-spacing:-0.025em;line-height:1.1;color:#F2F5F8;">'
     'MLB Prop Model</div>'
-    '<div style="color:#8B949E;font-size:0.86rem;margin-top:2px;">'
-    'Total Bases · Hits+Runs+RBIs · Pitcher Ks &nbsp;—&nbsp; log5 + Statcast, park &amp; weather adjusted</div>'
     '</div>'
     '<div style="flex:0 0 auto;align-self:center;font-size:0.72rem;font-weight:600;'
     'color:#4C8DFF;background:rgba(76,141,255,0.12);border:1px solid rgba(76,141,255,0.28);'
@@ -375,8 +378,8 @@ E.HRR_DISPERSION = float(hrr_disp)
 E.K_DISPERSION = float(k_disp)
 if not slate:
     st.info("Pick a date and click **Load slate**. Lineups appear ~3–4 hours before first pitch; "
-            "until then you'll see probable pitchers but empty lineups.")
-    st.stop()
+            "until then you'll see probable pitchers but empty lineups. "
+            "The Performance, Paper Bankroll, Closing Lines and Game Day tabs work without a loaded slate.")
 
 T_cal, T_caln = 1.0, 0
 if use_calibration and auto_cal:
@@ -692,7 +695,7 @@ def _log_all_props(slate, date_str):
     return total
 
 _proj_stale = st.session_state.get("proj_meta") != (date.isoformat(), STAT)
-if go or st.session_state.get("proj_df") is None or _proj_stale:
+if slate and (go or st.session_state.get("proj_df") is None or _proj_stale):
     if STAT == "K":
         all_rows = build_k_rows(slate)
     else:
@@ -703,54 +706,55 @@ if go or st.session_state.get("proj_df") is None or _proj_stale:
             st.write(f"**{mu.away} @ {mu.home}** — "
                      f"{mu.away_pitcher.name if mu.away_pitcher else 'TBD'} vs "
                      f"{mu.home_pitcher.name if mu.home_pitcher else 'TBD'}")
-        st.stop()
-    _frozen = pd.DataFrame(all_rows)
-    st.session_state["proj_df"] = _frozen
-    st.session_state["proj_meta"] = (date.isoformat(), STAT)
+    else:
+        _frozen = pd.DataFrame(all_rows)
+        st.session_state["proj_df"] = _frozen
+        st.session_state["proj_meta"] = (date.isoformat(), STAT)
 
 
 
 df = st.session_state["proj_df"]
 
-def _lean(row):
-    p = row["P(Over)"]
-    if p is None or (isinstance(p, float) and pd.isna(p)):
-        return "—"
-    p = float(p)
-    if abs(p - 0.5) < tossup_band:
-        return "No lean"
-    return "Over" if p > 0.5 else "Under"
-df["Lean"] = df.apply(_lean, axis=1)
-def _lean_pct(row):
-    p = row["P(Over)"]
-    if p is None or (isinstance(p, float) and pd.isna(p)) or row["Lean"] not in ("Over", "Under"):
+if df is not None and not df.empty:
+    def _lean(row):
+        p = row["P(Over)"]
+        if p is None or (isinstance(p, float) and pd.isna(p)):
+            return "—"
+        p = float(p)
+        if abs(p - 0.5) < tossup_band:
+            return "No lean"
+        return "Over" if p > 0.5 else "Under"
+    df["Lean"] = df.apply(_lean, axis=1)
+    def _lean_pct(row):
+        p = row["P(Over)"]
+        if p is None or (isinstance(p, float) and pd.isna(p)) or row["Lean"] not in ("Over", "Under"):
+            return None
+        p = float(p)
+        return (p if p >= 0.5 else 1 - p) * 100
+    df["Lean %"] = df.apply(_lean_pct, axis=1)
+
+    bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"], r.get("Venue", ""))
+               for _, r in df.iterrows()}
+    dist_map = {(r["Game"], r["Batter"]): r.get("_dist") for _, r in df.iterrows()}
+    lam_map = {(r["Game"], r["Batter"]): r.get("_lam") for _, r in df.iterrows()}
+
+    def cover_at(game, batter, line, side="Over"):
+        """Recompute cover prob at an arbitrary line from the stored distribution/lam."""
+        k = (game, batter)
+        d = dist_map.get(k)
+        if d is not None:
+            return _calibrate(E.p_cover_from_dist(list(d), line, side))
+        lam = lam_map.get(k)
+        if lam is not None:
+            if STAT == "K":
+                return _calibrate(E.p_cover_negbin(float(lam), line, side, E.K_DISPERSION))
+            if STAT == "HRR":
+                return _calibrate(E.p_cover_negbin(float(lam), line, side, E.HRR_DISPERSION))
+            return _calibrate(E.p_cover_poisson(float(lam), line, side))
         return None
-    p = float(p)
-    return (p if p >= 0.5 else 1 - p) * 100
-df["Lean %"] = df.apply(_lean_pct, axis=1)
-
-bid_map = {(r["Game"], r["Batter"]): (r.get("_bid", 0), r["vs Pitcher"], r.get("Venue", ""))
-           for _, r in df.iterrows()}
-dist_map = {(r["Game"], r["Batter"]): r.get("_dist") for _, r in df.iterrows()}
-lam_map = {(r["Game"], r["Batter"]): r.get("_lam") for _, r in df.iterrows()}
-
-def cover_at(game, batter, line, side="Over"):
-    """Recompute cover prob at an arbitrary line from the stored distribution/lam."""
-    k = (game, batter)
-    d = dist_map.get(k)
-    if d is not None:
-        return _calibrate(E.p_cover_from_dist(list(d), line, side))
-    lam = lam_map.get(k)
-    if lam is not None:
-        if STAT == "K":
-            return _calibrate(E.p_cover_negbin(float(lam), line, side, E.K_DISPERSION))
-        if STAT == "HRR":
-            return _calibrate(E.p_cover_negbin(float(lam), line, side, E.HRR_DISPERSION))
-        return _calibrate(E.p_cover_poisson(float(lam), line, side))
-    return None
-_fd, _fs = st.session_state.get("proj_meta", ("", STAT))
-st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
-           "Change settings or date? Click **Load slate** to recompute.")
+    _fd, _fs = st.session_state.get("proj_meta", ("", STAT))
+    st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
+               "Change settings or date? Click **Load slate** to recompute.")
 
 # --------------------------------------------------------------------------- #
 # Summary + projections                                                       #
@@ -758,466 +762,469 @@ st.caption(f"Projections frozen from your last load ({_fd}, {_fs}). "
 tab_bet, tab_perf, tab_paper, tab_clv, tab_gameday = st.tabs(["📊 Projections & Odds", "📈 Performance", "💰 Paper Bankroll", "🎯 Closing Lines (CLV)", "📰 Game Day"])
 
 with tab_bet:
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Games", len(slate))
-    m2.metric("Hitters projected", len(df))
-    m3.metric(f"Avg projected {STAT}", f"{df[proj_col].mean():.2f}")
-    m4.metric("Highest projection", f"{df[proj_col].max():.2f}")
-    st.write("")
+    if df is None or df.empty:
+        st.info("Load a slate at the top of the page to generate projections & odds for the day.")
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Games", len(slate))
+        m2.metric("Hitters projected", len(df))
+        m3.metric(f"Avg projected {STAT}", f"{df[proj_col].mean():.2f}")
+        m4.metric("Highest projection", f"{df[proj_col].max():.2f}")
+        st.write("")
 
-    st.subheader("Projections")
-    st.caption(f"Every hitter vs the opposing starter, sorted by projected {STAT}. Add odds below for edges.")
-    _exp_n = sum(1 for _mu in slate for _b in (_mu.home_lineup + _mu.away_lineup)
-                 if getattr(_b, "expected", False))
-    if _exp_n:
-        st.warning(f"⚠ {_exp_n} hitters are from PROJECTED lineups (each team's last game), not today's "
-                   "confirmed order. Get your picks in now, then reload when official lineups post to update "
-                   "the changed spots (usually 7–9).")
-    view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
-                 "vsSP%", proj_col, "P(Over)", "Lean", "Lean %", "Fair Over odds", "Conf", "Venue", "Wx"]
-    dfv = df[view_cols].sort_values(proj_col, ascending=False).copy()
-    dfv["P(Over)"] = dfv["P(Over)"] * 100
-    dfv["Conf"] = dfv["Conf"].apply(lambda n: "★" * int(n) if pd.notna(n) else "")
-    st.dataframe(
-        dfv, use_container_width=True, hide_index=True,
-        column_config={
-            "vs Pitcher": st.column_config.TextColumn("vs Pitcher", width="medium"),
-            "vsSP%": st.column_config.NumberColumn("vs SP", format="%d%%", help="Share of PAs vs the starter"),
-            proj_col: st.column_config.NumberColumn(proj_col, format="%.2f"),
-            "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.1f%%"),
-            "Lean %": st.column_config.NumberColumn("Lean %", format="%.0f%%", help="Model probability on the side it leans"),
-            "Fair Over odds": st.column_config.NumberColumn("Fair Over", format="%+d"),
-            "Conf": st.column_config.TextColumn("Conf", help="Data-quality confidence (sample size + split depth), not edge"),
-            "Wx": st.column_config.TextColumn("Weather"),
-        })
+        st.subheader("Projections")
+        st.caption(f"Every hitter vs the opposing starter, sorted by projected {STAT}. Add odds below for edges.")
+        _exp_n = sum(1 for _mu in slate for _b in (_mu.home_lineup + _mu.away_lineup)
+                     if getattr(_b, "expected", False))
+        if _exp_n:
+            st.warning(f"⚠ {_exp_n} hitters are from PROJECTED lineups (each team's last game), not today's "
+                       "confirmed order. Get your picks in now, then reload when official lineups post to update "
+                       "the changed spots (usually 7–9).")
+        view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
+                     "vsSP%", proj_col, "P(Over)", "Lean", "Lean %", "Fair Over odds", "Conf", "Venue", "Wx"]
+        dfv = df[view_cols].sort_values(proj_col, ascending=False).copy()
+        dfv["P(Over)"] = dfv["P(Over)"] * 100
+        dfv["Conf"] = dfv["Conf"].apply(lambda n: "★" * int(n) if pd.notna(n) else "")
+        st.dataframe(
+            dfv, use_container_width=True, hide_index=True,
+            column_config={
+                "vs Pitcher": st.column_config.TextColumn("vs Pitcher", width="medium"),
+                "vsSP%": st.column_config.NumberColumn("vs SP", format="%d%%", help="Share of PAs vs the starter"),
+                proj_col: st.column_config.NumberColumn(proj_col, format="%.2f"),
+                "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.1f%%"),
+                "Lean %": st.column_config.NumberColumn("Lean %", format="%.0f%%", help="Model probability on the side it leans"),
+                "Fair Over odds": st.column_config.NumberColumn("Fair Over", format="%+d"),
+                "Conf": st.column_config.TextColumn("Conf", help="Data-quality confidence (sample size + split depth), not edge"),
+                "Wx": st.column_config.TextColumn("Weather"),
+            })
 
-    if STAT == "K":
-        with st.expander("Strikeout projection detail (diagnose over/under-projection)"):
-            _kcols = [c for c in ["Batter", "_p_rate", "_exp_pa", "_matchup", proj_col] if c in df.columns]
-            _kd = df[_kcols].copy()
-            _kd = _kd.rename(columns={"Batter": "Pitcher", "_p_rate": "Season K/BF",
-                                      "_exp_pa": "BF faced", "_matchup": "Eff K/BF", proj_col: "Proj Ks"})
-            st.dataframe(_kd.sort_values("Proj Ks", ascending=False), use_container_width=True, hide_index=True,
-                         column_config={
-                             "Season K/BF": st.column_config.NumberColumn("Season K/BF", format="%.3f"),
-                             "Eff K/BF": st.column_config.NumberColumn("Eff K/BF (used)", format="%.3f"),
-                             "BF faced": st.column_config.NumberColumn("BF faced", format="%.1f"),
-                             "Proj Ks": st.column_config.NumberColumn("Proj Ks", format="%.2f")})
-            st.caption("Read it like this: if **Season K/BF** clearly differs between pitchers but **Eff K/BF** "
-                       "is nearly the same for everyone, the pitcher's rate is being washed toward league average — "
-                       "lower the **Regression K (PA)** slider (Model & matchup), or turn off the SwStr blend to test.")
+        if STAT == "K":
+            with st.expander("Strikeout projection detail (diagnose over/under-projection)"):
+                _kcols = [c for c in ["Batter", "_p_rate", "_exp_pa", "_matchup", proj_col] if c in df.columns]
+                _kd = df[_kcols].copy()
+                _kd = _kd.rename(columns={"Batter": "Pitcher", "_p_rate": "Season K/BF",
+                                          "_exp_pa": "BF faced", "_matchup": "Eff K/BF", proj_col: "Proj Ks"})
+                st.dataframe(_kd.sort_values("Proj Ks", ascending=False), use_container_width=True, hide_index=True,
+                             column_config={
+                                 "Season K/BF": st.column_config.NumberColumn("Season K/BF", format="%.3f"),
+                                 "Eff K/BF": st.column_config.NumberColumn("Eff K/BF (used)", format="%.3f"),
+                                 "BF faced": st.column_config.NumberColumn("BF faced", format="%.1f"),
+                                 "Proj Ks": st.column_config.NumberColumn("Proj Ks", format="%.2f")})
+                st.caption("Read it like this: if **Season K/BF** clearly differs between pitchers but **Eff K/BF** "
+                           "is nearly the same for everyone, the pitcher's rate is being washed toward league average — "
+                           "lower the **Regression K (PA)** slider (Model & matchup), or turn off the SwStr blend to test.")
 
-    # --- Why the strong picks (collapsed) ---
-    def _summary(row):
-        p_over = float(row["P(Over)"])
-        sidelbl = row.get("Lean", "Over" if p_over >= 0.5 else "Under")
-        lp = p_over if sidelbl == "Over" else 1 - p_over
-        bits = [f"{row.get('B','?')}-bat vs {row.get('P','?')}HP {row.get('vs Pitcher','')}".strip()]
-        pk = row.get("_park", 1.0) or 1.0
-        if pk >= 1.03:
-            bits.append("hitter-friendly park")
-        elif pk <= 0.97:
-            bits.append("pitcher-friendly park")
-        if row.get("Wx"):
-            bits.append(f"wx {row['Wx']}")
-        rc, br = row.get("_recent"), row.get("_b_rate")
-        if rc is not None and br:
-            bits.append("running hot lately" if rc > br else "cold lately")
-        samp = f"{row.get('_bpa','?')} PA / {row.get('_pbf','?')} BF faced"
-        return (f"**{row['Batter']} {sidelbl} {row['Line']}** — model {lp*100:.0f}%. "
-                + "; ".join(bits) + f". Based on {samp}.")
+        # --- Why the strong picks (collapsed) ---
+        def _summary(row):
+            p_over = float(row["P(Over)"])
+            sidelbl = row.get("Lean", "Over" if p_over >= 0.5 else "Under")
+            lp = p_over if sidelbl == "Over" else 1 - p_over
+            bits = [f"{row.get('B','?')}-bat vs {row.get('P','?')}HP {row.get('vs Pitcher','')}".strip()]
+            pk = row.get("_park", 1.0) or 1.0
+            if pk >= 1.03:
+                bits.append("hitter-friendly park")
+            elif pk <= 0.97:
+                bits.append("pitcher-friendly park")
+            if row.get("Wx"):
+                bits.append(f"wx {row['Wx']}")
+            rc, br = row.get("_recent"), row.get("_b_rate")
+            if rc is not None and br:
+                bits.append("running hot lately" if rc > br else "cold lately")
+            samp = f"{row.get('_bpa','?')} PA / {row.get('_pbf','?')} BF faced"
+            return (f"**{row['Batter']} {sidelbl} {row['Line']}** — model {lp*100:.0f}%. "
+                    + "; ".join(bits) + f". Based on {samp}.")
 
-    _strong = df[df["Lean"].isin(["Over", "Under"])].copy()
-    _strong["_p_side"] = _strong.apply(
-        lambda r: float(r["P(Over)"]) if r["Lean"] == "Over" else 1 - float(r["P(Over)"]), axis=1)
-    _strong["_lean"] = _strong["_p_side"]
-    _strong = _strong[_strong["_p_side"] >= 0.56].sort_values("_p_side", ascending=False).head(3)
-    with st.expander("Why the strong picks — top leans + reasoning", expanded=False):
-        st.caption("Top cover-probability leans with their drivers. Stars = data confidence (sample/splits).")
-        if _strong.empty:
-            st.caption("No strong leans on this slate (no side at 57%+).")
-        else:
-            for _, _row in _strong.iterrows():
-                _stars = "★" * int(_row.get("Conf", 3))
-                _side = _row["Lean"]
-                st.markdown(f"**{_row['Batter']} — {_side} {_row['Line']} · "
-                            f"{_row['_p_side']*100:.0f}% · {_stars}**")
-                st.markdown(_summary(_row))
-                _brk = {
-                    "Regressed batter rate": _row.get("_b_rate"),
-                    "Pitcher allowed rate": _row.get("_p_rate"),
-                    "Log5 matchup / PA": _row.get("_matchup"),
-                    "Expected PA": _row.get("_exp_pa"),
-                    "Park factor": _row.get("_park"),
-                    "Weather": _row.get("Wx") or "—",
-                    "Recent rate": _row.get("_recent") if _row.get("_recent") is not None else "—",
-                    proj_col: _row.get(proj_col),
-                    "Model P(Over)": f"{float(_row['P(Over)'])*100:.1f}%",
-                    "Confidence (data)": _stars,
-                }
-                st.table(pd.DataFrame(list(_brk.items()), columns=["Factor", "Value"]))
-                st.divider()
+        _strong = df[df["Lean"].isin(["Over", "Under"])].copy()
+        _strong["_p_side"] = _strong.apply(
+            lambda r: float(r["P(Over)"]) if r["Lean"] == "Over" else 1 - float(r["P(Over)"]), axis=1)
+        _strong["_lean"] = _strong["_p_side"]
+        _strong = _strong[_strong["_p_side"] >= 0.56].sort_values("_p_side", ascending=False).head(3)
+        with st.expander("Why the strong picks — top leans + reasoning", expanded=False):
+            st.caption("Top cover-probability leans with their drivers. Stars = data confidence (sample/splits).")
+            if _strong.empty:
+                st.caption("No strong leans on this slate (no side at 57%+).")
+            else:
+                for _, _row in _strong.iterrows():
+                    _stars = "★" * int(_row.get("Conf", 3))
+                    _side = _row["Lean"]
+                    st.markdown(f"**{_row['Batter']} — {_side} {_row['Line']} · "
+                                f"{_row['_p_side']*100:.0f}% · {_stars}**")
+                    st.markdown(_summary(_row))
+                    _brk = {
+                        "Regressed batter rate": _row.get("_b_rate"),
+                        "Pitcher allowed rate": _row.get("_p_rate"),
+                        "Log5 matchup / PA": _row.get("_matchup"),
+                        "Expected PA": _row.get("_exp_pa"),
+                        "Park factor": _row.get("_park"),
+                        "Weather": _row.get("Wx") or "—",
+                        "Recent rate": _row.get("_recent") if _row.get("_recent") is not None else "—",
+                        proj_col: _row.get(proj_col),
+                        "Model P(Over)": f"{float(_row['P(Over)'])*100:.1f}%",
+                        "Confidence (data)": _stars,
+                    }
+                    st.table(pd.DataFrame(list(_brk.items()), columns=["Factor", "Value"]))
+                    st.divider()
 
-    st.subheader("Add your odds")
-    st.caption("Enter the Over and/or Under price (American) for each batter. The model checks BOTH sides "
-               "and surfaces whichever is +EV — so hitters that project under the line show up as Under value. "
-               "If you enter both prices, the market is de-vigged for a cleaner edge.")
-    odds_store = st.session_state.setdefault("odds_store", {})
-    if not st.session_state.get("_odds_loaded"):
-        try:
-            odds_store.update(T.read_odds())
-        except Exception:
-            pass
-        st.session_state["_odds_loaded"] = True
+        st.subheader("Add your odds")
+        st.caption("Enter the Over and/or Under price (American) for each batter. The model checks BOTH sides "
+                   "and surfaces whichever is +EV — so hitters that project under the line show up as Under value. "
+                   "If you enter both prices, the market is de-vigged for a cleaner edge.")
+        odds_store = st.session_state.setdefault("odds_store", {})
+        if not st.session_state.get("_odds_loaded"):
+            try:
+                odds_store.update(T.read_odds())
+            except Exception:
+                pass
+            st.session_state["_odds_loaded"] = True
 
-    def _okey(game, batter):
-        return (date.isoformat(), STAT, str(game), str(batter))
+        def _okey(game, batter):
+            return (date.isoformat(), STAT, str(game), str(batter))
 
-    # Canonical stateful data_editor: a STABLE base (rebuilt only on load) + a fixed
-    # key; edits live in the widget and come back via the return value. We never write
-    # the output back into the base, which is what caused the revert before.
-    def _pf(g, b, side):
-        return str(odds_store.get(_okey(g, b), {}).get(side, "") or "")
+        # Canonical stateful data_editor: a STABLE base (rebuilt only on load) + a fixed
+        # key; edits live in the widget and come back via the return value. We never write
+        # the output back into the base, which is what caused the revert before.
+        def _pf(g, b, side):
+            return str(odds_store.get(_okey(g, b), {}).get(side, "") or "")
 
-    def _pf_line(g, b):
-        v = odds_store.get(_okey(g, b), {}).get("line", None)
-        try:
-            return float(v)
-        except (ValueError, TypeError):
-            return None if STAT == "K" else float(default_line)
+        def _pf_line(g, b):
+            v = odds_store.get(_okey(g, b), {}).get("line", None)
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return None if STAT == "K" else float(default_line)
 
-    _basekey = f"odds_base_{date.isoformat()}_{STAT}"
-    _edkey = f"odds_ed_{date.isoformat()}_{STAT}"
-    _odds_active = (date.isoformat(), STAT)
-    # Rebuild (pre-filled from the saved store) on load OR whenever prop/date changes,
-    # so switching props restores each prop's saved odds + lines. Stable within a prop so edits don't revert.
-    if go or _basekey not in st.session_state or st.session_state.get("_odds_active") != _odds_active:
-        base = df[["Game", "Batter"]].copy()
-        base["Line"] = [_pf_line(g, b) for g, b in zip(base["Game"], base["Batter"])]
-        base["Over odds"] = pd.Series([_pf(g, b, "over") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
-        base["Under odds"] = pd.Series([_pf(g, b, "under") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
-        st.session_state[_basekey] = base
-        st.session_state.pop(_edkey, None)
-    st.session_state["_odds_active"] = _odds_active
-
-    st.caption("Edit **Line** per player for alt lines (e.g. 0.5 / 2.5) — the cover probability and edges recompute at the line you set.")
-    edited = st.data_editor(
-        st.session_state[_basekey], key=_edkey,
-        use_container_width=True, hide_index=True,
-        disabled=["Game", "Batter"],
-        column_config={
-            "Line": st.column_config.NumberColumn("Line", step=0.5, help="Alt line per player; cover prob recomputes here."),
-            "Over odds": st.column_config.TextColumn("Over odds", help="American odds, e.g. +120 or -110"),
-            "Under odds": st.column_config.TextColumn("Under odds", help="American odds, e.g. +120 or -110"),
-        })
-    # mirror entered odds into the cross-date store (read-only; does not feed the base)
-    for _, _r in edited.iterrows():
-        _o = str(_r["Over odds"] or "").strip()
-        _u = str(_r["Under odds"] or "").strip()
-        _l = _r.get("Line")
-        rec = {}
-        if _l is not None and not pd.isna(_l) and float(_l) != float(default_line):
-            rec["line"] = float(_l)
-        if _o:
-            rec["over"] = _o
-        if _u:
-            rec["under"] = _u
-        if rec:
-            odds_store[_okey(_r["Game"], _r["Batter"])] = rec
-        else:
-            odds_store.pop(_okey(_r["Game"], _r["Batter"]), None)
-    import json as _json
-    _oh = _json.dumps({"|".join(k): v for k, v in sorted(odds_store.items())}, sort_keys=True)
-    if _oh != st.session_state.get("_odds_hash"):
-        try:
-            T.write_odds(odds_store)
-        except Exception:
-            pass
-        st.session_state["_odds_hash"] = _oh
-
-    with st.expander("Import odds (paste or CSV) — auto-fill the table", expanded=False):
-        st.caption("Columns: Player, Line, Over, Under (header optional; comma or tab separated). "
-                   "Paste from BettingPros or a sheet, or upload a CSV. Matches by player name; "
-                   "any column you omit is just skipped.")
-        _imp_csv = st.file_uploader("CSV", type=["csv"], key="imp_csv")
-        _imp_txt = st.text_area("…or paste rows here", height=130, key="imp_txt",
-                                placeholder="Aaron Judge, 1.5, +120, -150")
-        if st.button("Import odds"):
-            import io, re, unicodedata
-
-            def _rows_from_df(d):
-                d = d.copy()
-                d.columns = [str(c).strip().lower() for c in d.columns]
-                def col(*names):
-                    for n in names:
-                        for c in d.columns:
-                            if n in str(c):
-                                return c
-                    return None
-                pcol, lcol, ocol, ucol = col("player", "name", "batter"), col("line"), col("over"), col("under")
-                out = []
-                if pcol is None:
-                    cols = list(d.columns)
-                    for _, r in d.iterrows():
-                        v = [r[c] for c in cols]
-                        if not v or str(v[0]).strip().lower() in ("player", "name", "batter"):
-                            continue
-                        out.append({"player": v[0],
-                                    "line": v[1] if len(v) > 1 else None,
-                                    "over": v[2] if len(v) > 2 else None,
-                                    "under": v[3] if len(v) > 3 else None})
-                else:
-                    for _, r in d.iterrows():
-                        out.append({"player": r.get(pcol),
-                                    "line": r.get(lcol) if lcol else None,
-                                    "over": r.get(ocol) if ocol else None,
-                                    "under": r.get(ucol) if ucol else None})
-                return out
-
-            rows = []
-            if _imp_csv is not None:
-                try:
-                    rows += _rows_from_df(pd.read_csv(_imp_csv, dtype=str))
-                except Exception as ex:
-                    st.error(f"CSV parse failed: {ex}")
-            if _imp_txt and _imp_txt.strip():
-                try:
-                    sep = "\t" if "\t" in _imp_txt else ","
-                    rows += _rows_from_df(pd.read_csv(io.StringIO(_imp_txt), sep=sep, dtype=str, header=None))
-                except Exception as ex:
-                    st.error(f"Paste parse failed: {ex}")
-
-            def _norm(s):
-                s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
-                return re.sub(r"\s+", " ", re.sub(r"[^a-z ]", "", s.lower())).strip()
-
-            _exact, _liname = {}, {}
-            for _, r in df.iterrows():
-                n = _norm(r["Batter"])
-                _exact[n] = (r["Game"], r["Batter"])
-                p = n.split()
-                if len(p) >= 2:
-                    _liname[(p[0][:1], p[-1])] = (r["Game"], r["Batter"])
-
-            def _match(name):
-                n = _norm(name)
-                if n in _exact:
-                    return _exact[n]
-                p = n.split()
-                if len(p) >= 2 and (p[0][:1], p[-1]) in _liname:
-                    return _liname[(p[0][:1], p[-1])]
-                for k, v in _exact.items():
-                    if p and k.split()[-1] == p[-1]:
-                        return v
-                return None
-
-            matched, unmatched = 0, []
-            for row in rows:
-                if not row.get("player"):
-                    continue
-                key = _match(row["player"])
-                if not key:
-                    unmatched.append(str(row["player"]).strip())
-                    continue
-                rec = dict(odds_store.get(_okey(*key), {}))
-                try:
-                    if row.get("line") not in (None, "") and not pd.isna(row.get("line")):
-                        rec["line"] = float(row["line"])
-                except (ValueError, TypeError):
-                    pass
-                for side in ("over", "under"):
-                    v = row.get(side)
-                    if v is not None and str(v).strip() and str(v).strip().lower() != "nan":
-                        rec[side] = str(v).strip().replace(" ", "")
-                if rec:
-                    odds_store[_okey(*key)] = rec
-                    matched += 1
-            st.session_state.pop(_basekey, None)
+        _basekey = f"odds_base_{date.isoformat()}_{STAT}"
+        _edkey = f"odds_ed_{date.isoformat()}_{STAT}"
+        _odds_active = (date.isoformat(), STAT)
+        # Rebuild (pre-filled from the saved store) on load OR whenever prop/date changes,
+        # so switching props restores each prop's saved odds + lines. Stable within a prop so edits don't revert.
+        if go or _basekey not in st.session_state or st.session_state.get("_odds_active") != _odds_active:
+            base = df[["Game", "Batter"]].copy()
+            base["Line"] = [_pf_line(g, b) for g, b in zip(base["Game"], base["Batter"])]
+            base["Over odds"] = pd.Series([_pf(g, b, "over") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
+            base["Under odds"] = pd.Series([_pf(g, b, "under") for g, b in zip(base["Game"], base["Batter"])], dtype="object")
+            st.session_state[_basekey] = base
             st.session_state.pop(_edkey, None)
+        st.session_state["_odds_active"] = _odds_active
+
+        st.caption("Edit **Line** per player for alt lines (e.g. 0.5 / 2.5) — the cover probability and edges recompute at the line you set.")
+        edited = st.data_editor(
+            st.session_state[_basekey], key=_edkey,
+            use_container_width=True, hide_index=True,
+            disabled=["Game", "Batter"],
+            column_config={
+                "Line": st.column_config.NumberColumn("Line", step=0.5, help="Alt line per player; cover prob recomputes here."),
+                "Over odds": st.column_config.TextColumn("Over odds", help="American odds, e.g. +120 or -110"),
+                "Under odds": st.column_config.TextColumn("Under odds", help="American odds, e.g. +120 or -110"),
+            })
+        # mirror entered odds into the cross-date store (read-only; does not feed the base)
+        for _, _r in edited.iterrows():
+            _o = str(_r["Over odds"] or "").strip()
+            _u = str(_r["Under odds"] or "").strip()
+            _l = _r.get("Line")
+            rec = {}
+            if _l is not None and not pd.isna(_l) and float(_l) != float(default_line):
+                rec["line"] = float(_l)
+            if _o:
+                rec["over"] = _o
+            if _u:
+                rec["under"] = _u
+            if rec:
+                odds_store[_okey(_r["Game"], _r["Batter"])] = rec
+            else:
+                odds_store.pop(_okey(_r["Game"], _r["Batter"]), None)
+        import json as _json
+        _oh = _json.dumps({"|".join(k): v for k, v in sorted(odds_store.items())}, sort_keys=True)
+        if _oh != st.session_state.get("_odds_hash"):
             try:
                 T.write_odds(odds_store)
             except Exception:
                 pass
-            msg = f"Imported odds for {matched} players."
-            if unmatched:
-                msg += f" Unmatched ({len(unmatched)}): " + ", ".join(unmatched[:8])
-            st.success(msg)
-            st.rerun()
+            st.session_state["_odds_hash"] = _oh
 
-    def _num(x):
-        if x is None or (isinstance(x, float) and pd.isna(x)):
-            return None
-        try:
-            v = float(str(x).strip())
-            return None if pd.isna(v) else v
-        except (ValueError, TypeError):
-            return None
+        with st.expander("Import odds (paste or CSV) — auto-fill the table", expanded=False):
+            st.caption("Columns: Player, Line, Over, Under (header optional; comma or tab separated). "
+                       "Paste from BettingPros or a sheet, or upload a CSV. Matches by player name; "
+                       "any column you omit is just skipped.")
+            _imp_csv = st.file_uploader("CSV", type=["csv"], key="imp_csv")
+            _imp_txt = st.text_area("…or paste rows here", height=130, key="imp_txt",
+                                    placeholder="Aaron Judge, 1.5, +120, -150")
+            if st.button("Import odds"):
+                import io, re, unicodedata
 
-    results = []
-    _confmap = {(r["Game"], r["Batter"]): int(r.get("Conf", 3)) for _, r in df.iterrows()} if (df is not None and not df.empty and "Conf" in df.columns) else {}
-    _CONF_FACTOR = {5: 1.0, 4: 0.9, 3: 0.7, 2: 0.5, 1: 0.25}
-    for _, row in edited.iterrows():
-        over_odds, under_odds = _num(row["Over odds"]), _num(row["Under odds"])
-        if over_odds is None and under_odds is None:
-            continue
-        line = _num(row["Line"]) or (None if STAT == "K" else default_line)
-        if line is None:
-            continue
-        p_over = cover_at(row["Game"], row["Batter"], line, "Over")
-        if p_over is None:
-            continue
-        p_under = 1 - p_over
-        # Fair market probs: de-vig if both prices present, else use the single implied price
-        if over_odds is not None and under_odds is not None:
-            fair_over, fair_under = E.no_vig_two_way(over_odds, under_odds)
-        else:
-            fair_over = E.american_to_implied(over_odds) if over_odds is not None else None
-            fair_under = E.american_to_implied(under_odds) if under_odds is not None else None
-        for sidelabel, p_model, odds, fair in (
-            ("Over", p_over, over_odds, fair_over),
-            ("Under", p_under, under_odds, fair_under)):
-            if odds is None:
-                continue
-            payout = E.american_to_decimal_profit(odds)
-            ev = p_model * payout - (1 - p_model)
-            edge = p_model - (fair if fair is not None else E.american_to_implied(odds))
-            if conf_shrink > 0:
-                _mkt = fair if fair is not None else E.american_to_implied(odds)
-                _p_size = (1 - conf_shrink) * p_model + conf_shrink * _mkt
-            else:
-                _p_size = p_model
-            _cf = _CONF_FACTOR.get(_confmap.get((row["Game"], row["Batter"]), 3), 0.45) if conf_stake else 1.0
-            kel = min(E.kelly_fraction(_p_size, odds) * kelly_mult * _cf, max_stake / 100.0)
-            results.append({
-                "Game": row["Game"], "Batter": row["Batter"], "Line": line,
-                "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
-                "Fair P": round(fair, 3) if fair is not None else None,
-                "Edge": round(edge, 3), "Model EV": round(ev, 3),
-                "Stake $": round(kel * current_bk, 2),
-                "Verdict": "VALUE" if edge >= min_edge else ("Lean" if edge >= 0 else "Pass"),
-            })
+                def _rows_from_df(d):
+                    d = d.copy()
+                    d.columns = [str(c).strip().lower() for c in d.columns]
+                    def col(*names):
+                        for n in names:
+                            for c in d.columns:
+                                if n in str(c):
+                                    return c
+                        return None
+                    pcol, lcol, ocol, ucol = col("player", "name", "batter"), col("line"), col("over"), col("under")
+                    out = []
+                    if pcol is None:
+                        cols = list(d.columns)
+                        for _, r in d.iterrows():
+                            v = [r[c] for c in cols]
+                            if not v or str(v[0]).strip().lower() in ("player", "name", "batter"):
+                                continue
+                            out.append({"player": v[0],
+                                        "line": v[1] if len(v) > 1 else None,
+                                        "over": v[2] if len(v) > 2 else None,
+                                        "under": v[3] if len(v) > 3 else None})
+                    else:
+                        for _, r in d.iterrows():
+                            out.append({"player": r.get(pcol),
+                                        "line": r.get(lcol) if lcol else None,
+                                        "over": r.get(ocol) if ocol else None,
+                                        "under": r.get(ucol) if ucol else None})
+                    return out
 
-    if results:
-        rdf = pd.DataFrame(results)
-        fcol1, fcol2 = st.columns(2)
-        only_plays = fcol1.checkbox("Only +EV sides", True)
-        plus_only = fcol2.checkbox("Plus-money only (+odds)", False,
-                                   help="Show only underdog prices — where a modest hit rate still profits.")
-        if only_plays:
-            rdf = rdf[rdf["Model EV"] >= 0]
-        if plus_only:
-            rdf = rdf[rdf["Odds"] > 0]
-        rdf = rdf.sort_values("Model EV", ascending=False)
-        _cmap = {(r["Game"], r["Batter"]): r.get("Conf", 3) for _, r in df.iterrows()}
-        rdf["Conf"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
+                rows = []
+                if _imp_csv is not None:
+                    try:
+                        rows += _rows_from_df(pd.read_csv(_imp_csv, dtype=str))
+                    except Exception as ex:
+                        st.error(f"CSV parse failed: {ex}")
+                if _imp_txt and _imp_txt.strip():
+                    try:
+                        sep = "\t" if "\t" in _imp_txt else ","
+                        rows += _rows_from_df(pd.read_csv(io.StringIO(_imp_txt), sep=sep, dtype=str, header=None))
+                    except Exception as ex:
+                        st.error(f"Paste parse failed: {ex}")
 
-        _val = rdf[rdf["Model EV"] > 0].sort_values("Model EV", ascending=False).head(5)
-        if not _val.empty:
-            st.subheader("Top 5 value plays")
-            st.caption("Ranked by expected ROI at your price (not hit rate) — plus-money value floats up.")
-            _vshow = _val[["Batter", "Side", "Line", "Odds", "Model P", "Model EV", "Edge", "Stake $", "Conf"]].copy()
-            _vshow["Edge"] = _vshow["Edge"] * 100      # fraction -> percentage points
-            _vshow["Model EV"] = _vshow["Model EV"] * 100
-            _vshow["Model P"] = _vshow["Model P"] * 100
-            st.dataframe(_vshow, use_container_width=True, hide_index=True,
-                         column_config={
-                             "Odds": st.column_config.NumberColumn("Odds", format="%+d"),
-                             "Model P": st.column_config.NumberColumn("Model %", format="%.1f%%", help="Model probability on the side you're betting"),
-                             "Model EV": st.column_config.NumberColumn("EV (ROI)", format="%+.1f%%"),
-                             "Edge": st.column_config.NumberColumn("Edge", format="%+.1f%%"),
-                             "Stake $": st.column_config.NumberColumn("Stake", format="$%.2f"),
-                         })
+                def _norm(s):
+                    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+                    return re.sub(r"\s+", " ", re.sub(r"[^a-z ]", "", s.lower())).strip()
 
-        st.subheader("Ranked edges")
+                _exact, _liname = {}, {}
+                for _, r in df.iterrows():
+                    n = _norm(r["Batter"])
+                    _exact[n] = (r["Game"], r["Batter"])
+                    p = n.split()
+                    if len(p) >= 2:
+                        _liname[(p[0][:1], p[-1])] = (r["Game"], r["Batter"])
 
-        def _verdict_style(v):
-            return {"VALUE": "background-color:#10362C;color:#5DE0BB;font-weight:600",
-                    "Lean": "background-color:#3A2E12;color:#E3B341",
-                    "Pass": "color:#7A828C"}.get(v, "")
-        _pct = lambda x: "—" if pd.isna(x) else f"{x:.2%}"
-        _spct = lambda x: "—" if pd.isna(x) else f"{x:+.1%}"
-        try:
-            sty = rdf.style.format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
-                                    "Model EV": _spct, "Odds": lambda x: f"{x:+.0f}",
-                                    "Stake $": lambda x: f"${x:,.2f}"})
-            sty = sty.map(_verdict_style, subset=["Verdict"]) if hasattr(sty, "map") \
-                else sty.applymap(_verdict_style, subset=["Verdict"])
-            st.dataframe(sty, use_container_width=True, hide_index=True)
-        except Exception:
-            st.dataframe(rdf, use_container_width=True, hide_index=True)
-        st.download_button("Download edges (CSV)", rdf.to_csv(index=False),
-                           file_name=f"tb_edges_{date.isoformat()}.csv")
+                def _match(name):
+                    n = _norm(name)
+                    if n in _exact:
+                        return _exact[n]
+                    p = n.split()
+                    if len(p) >= 2 and (p[0][:1], p[-1]) in _liname:
+                        return _liname[(p[0][:1], p[-1])]
+                    for k, v in _exact.items():
+                        if p and k.split()[-1] == p[-1]:
+                            return v
+                    return None
 
-        st.markdown("**Log the plays you're betting**")
-        st.caption("Stake is in DOLLARS (defaults to Kelly fraction × your bankroll). "
-                   "Edit it to what you actually bet, then tick and log — the bankroll ledger sums these.")
-        _bsig = tuple((str(r["Batter"]), str(r["Side"]), str(r["Odds"]), str(r["Line"]))
-                      for _, r in rdf.iterrows())
-        _bkey = f"bet_base_{date.isoformat()}_{STAT}"
-        _bedkey = f"bet_ed_{date.isoformat()}_{STAT}"
-        if st.session_state.get(_bkey + "_sig") != _bsig:
-            _bb = rdf[["Game", "Batter", "Side", "Line", "Odds"]].copy()
-            _bb.insert(0, "Bet", False)
-            _bb["Stake $"] = rdf["Stake $"].round(2).values
-            st.session_state[_bkey] = _bb
-            st.session_state[_bkey + "_sig"] = _bsig
-            st.session_state.pop(_bedkey, None)
-        bet_edited = st.data_editor(
-            st.session_state[_bkey], key=_bedkey, hide_index=True, use_container_width=True,
-            disabled=["Game", "Batter", "Side", "Line", "Odds"],
-            column_config={"Bet": st.column_config.CheckboxColumn("Bet", help="Tick to log this play"),
-                           "Stake $": st.column_config.NumberColumn("Stake ($)", min_value=0.0, step=1.0, format="$%.2f")})
-        if st.button("✓ Log selected bets", type="primary"):
-            brows = []
-            for _, r in bet_edited.iterrows():
-                if not bool(r["Bet"]):
-                    continue
+                matched, unmatched = 0, []
+                for row in rows:
+                    if not row.get("player"):
+                        continue
+                    key = _match(row["player"])
+                    if not key:
+                        unmatched.append(str(row["player"]).strip())
+                        continue
+                    rec = dict(odds_store.get(_okey(*key), {}))
+                    try:
+                        if row.get("line") not in (None, "") and not pd.isna(row.get("line")):
+                            rec["line"] = float(row["line"])
+                    except (ValueError, TypeError):
+                        pass
+                    for side in ("over", "under"):
+                        v = row.get(side)
+                        if v is not None and str(v).strip() and str(v).strip().lower() != "nan":
+                            rec[side] = str(v).strip().replace(" ", "")
+                    if rec:
+                        odds_store[_okey(*key)] = rec
+                        matched += 1
+                st.session_state.pop(_basekey, None)
+                st.session_state.pop(_edkey, None)
                 try:
-                    stake = float(r["Stake $"])
-                except (ValueError, TypeError):
-                    stake = 1.0
-                bid, pitch, ven = bid_map.get((r["Game"], r["Batter"]), (0, "", ""))
-                brows.append({"date": date.isoformat(), "batter": r["Batter"], "batter_id": bid,
-                              "pitcher": pitch, "venue": ven, "line": r["Line"], "side": r["Side"],
-                              "odds": r["Odds"], "stake": stake, "prop": STAT})
-            if brows:
-                try:
-                    nb = T.log_bets(pd.DataFrame(brows))
-                    _invalidate_tracker_cache()
-                    st.success(f"Logged {nb} bet(s) to the sheet.")
-                except Exception as ex:
-                    st.error(f"Bet log failed: {ex}")
-            else:
-                st.warning("Tick at least one play first.")
+                    T.write_odds(odds_store)
+                except Exception:
+                    pass
+                msg = f"Imported odds for {matched} players."
+                if unmatched:
+                    msg += f" Unmatched ({len(unmatched)}): " + ", ".join(unmatched[:8])
+                st.success(msg)
+                st.rerun()
 
-    # --------------------------------------------------------------------------- #
-    # Multi-book de-vig helper                                                     #
-    # --------------------------------------------------------------------------- #
-    with st.expander("Multi-book no-vig fair line calculator (Pinnacle/FD/DK/MGM/Caesars/Bovada)"):
-        st.caption("Enter over/under prices per book to get a weighted no-vig fair line, like your 'Weighted AVG' sheet.")
-        books = ["Pinnacle", "FanDuel", "DraftKings", "MGM", "Caesars", "Bovada"]
-        default_w = {"Pinnacle": 0.2, "FanDuel": 0.2, "DraftKings": 0.2,
-                     "MGM": 0.1, "Caesars": 0.1, "Bovada": 0.1}
-        book_df = pd.DataFrame({"Book": books,
-                                "Over": ["" for _ in books],
-                                "Under": ["" for _ in books],
-                                "Weight": [default_w[b] for b in books]})
-        be = st.data_editor(book_df, hide_index=True, use_container_width=True)
-        lines = []
-        for _, r in be.iterrows():
+        def _num(x):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return None
             try:
-                lines.append(E.BookLine(r["Book"], float(r["Over"]), float(r["Under"]), float(r["Weight"])))
+                v = float(str(x).strip())
+                return None if pd.isna(v) else v
             except (ValueError, TypeError):
-                continue
-        if lines:
-            res = E.weighted_no_vig(lines)
-            if res["fair_over"]:
-                st.metric("Fair Over probability", f"{res['fair_over']*100:.1f}%",
-                          help=f"Fair Over odds ≈ {res['fair_over_american']:+.0f}")
+                return None
 
-    # --------------------------------------------------------------------------- #
-    # Accuracy tracker                                                            #
-    # --------------------------------------------------------------------------- #
+        results = []
+        _confmap = {(r["Game"], r["Batter"]): int(r.get("Conf", 3)) for _, r in df.iterrows()} if (df is not None and not df.empty and "Conf" in df.columns) else {}
+        _CONF_FACTOR = {5: 1.0, 4: 0.9, 3: 0.7, 2: 0.5, 1: 0.25}
+        for _, row in edited.iterrows():
+            over_odds, under_odds = _num(row["Over odds"]), _num(row["Under odds"])
+            if over_odds is None and under_odds is None:
+                continue
+            line = _num(row["Line"]) or (None if STAT == "K" else default_line)
+            if line is None:
+                continue
+            p_over = cover_at(row["Game"], row["Batter"], line, "Over")
+            if p_over is None:
+                continue
+            p_under = 1 - p_over
+            # Fair market probs: de-vig if both prices present, else use the single implied price
+            if over_odds is not None and under_odds is not None:
+                fair_over, fair_under = E.no_vig_two_way(over_odds, under_odds)
+            else:
+                fair_over = E.american_to_implied(over_odds) if over_odds is not None else None
+                fair_under = E.american_to_implied(under_odds) if under_odds is not None else None
+            for sidelabel, p_model, odds, fair in (
+                ("Over", p_over, over_odds, fair_over),
+                ("Under", p_under, under_odds, fair_under)):
+                if odds is None:
+                    continue
+                payout = E.american_to_decimal_profit(odds)
+                ev = p_model * payout - (1 - p_model)
+                edge = p_model - (fair if fair is not None else E.american_to_implied(odds))
+                if conf_shrink > 0:
+                    _mkt = fair if fair is not None else E.american_to_implied(odds)
+                    _p_size = (1 - conf_shrink) * p_model + conf_shrink * _mkt
+                else:
+                    _p_size = p_model
+                _cf = _CONF_FACTOR.get(_confmap.get((row["Game"], row["Batter"]), 3), 0.45) if conf_stake else 1.0
+                kel = min(E.kelly_fraction(_p_size, odds) * kelly_mult * _cf, max_stake / 100.0)
+                results.append({
+                    "Game": row["Game"], "Batter": row["Batter"], "Line": line,
+                    "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
+                    "Fair P": round(fair, 3) if fair is not None else None,
+                    "Edge": round(edge, 3), "Model EV": round(ev, 3),
+                    "Stake $": round(kel * current_bk, 2),
+                    "Verdict": "VALUE" if edge >= min_edge else ("Lean" if edge >= 0 else "Pass"),
+                })
+
+        if results:
+            rdf = pd.DataFrame(results)
+            fcol1, fcol2 = st.columns(2)
+            only_plays = fcol1.checkbox("Only +EV sides", True)
+            plus_only = fcol2.checkbox("Plus-money only (+odds)", False,
+                                       help="Show only underdog prices — where a modest hit rate still profits.")
+            if only_plays:
+                rdf = rdf[rdf["Model EV"] >= 0]
+            if plus_only:
+                rdf = rdf[rdf["Odds"] > 0]
+            rdf = rdf.sort_values("Model EV", ascending=False)
+            _cmap = {(r["Game"], r["Batter"]): r.get("Conf", 3) for _, r in df.iterrows()}
+            rdf["Conf"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
+
+            _val = rdf[rdf["Model EV"] > 0].sort_values("Model EV", ascending=False).head(5)
+            if not _val.empty:
+                st.subheader("Top 5 value plays")
+                st.caption("Ranked by expected ROI at your price (not hit rate) — plus-money value floats up.")
+                _vshow = _val[["Batter", "Side", "Line", "Odds", "Model P", "Model EV", "Edge", "Stake $", "Conf"]].copy()
+                _vshow["Edge"] = _vshow["Edge"] * 100      # fraction -> percentage points
+                _vshow["Model EV"] = _vshow["Model EV"] * 100
+                _vshow["Model P"] = _vshow["Model P"] * 100
+                st.dataframe(_vshow, use_container_width=True, hide_index=True,
+                             column_config={
+                                 "Odds": st.column_config.NumberColumn("Odds", format="%+d"),
+                                 "Model P": st.column_config.NumberColumn("Model %", format="%.1f%%", help="Model probability on the side you're betting"),
+                                 "Model EV": st.column_config.NumberColumn("EV (ROI)", format="%+.1f%%"),
+                                 "Edge": st.column_config.NumberColumn("Edge", format="%+.1f%%"),
+                                 "Stake $": st.column_config.NumberColumn("Stake", format="$%.2f"),
+                             })
+
+            st.subheader("Ranked edges")
+
+            def _verdict_style(v):
+                return {"VALUE": "background-color:#10362C;color:#5DE0BB;font-weight:600",
+                        "Lean": "background-color:#3A2E12;color:#E3B341",
+                        "Pass": "color:#7A828C"}.get(v, "")
+            _pct = lambda x: "—" if pd.isna(x) else f"{x:.2%}"
+            _spct = lambda x: "—" if pd.isna(x) else f"{x:+.1%}"
+            try:
+                sty = rdf.style.format({"Model P": _pct, "Fair P": _pct, "Edge": _spct,
+                                        "Model EV": _spct, "Odds": lambda x: f"{x:+.0f}",
+                                        "Stake $": lambda x: f"${x:,.2f}"})
+                sty = sty.map(_verdict_style, subset=["Verdict"]) if hasattr(sty, "map") \
+                    else sty.applymap(_verdict_style, subset=["Verdict"])
+                st.dataframe(sty, use_container_width=True, hide_index=True)
+            except Exception:
+                st.dataframe(rdf, use_container_width=True, hide_index=True)
+            st.download_button("Download edges (CSV)", rdf.to_csv(index=False),
+                               file_name=f"tb_edges_{date.isoformat()}.csv")
+
+            st.markdown("**Log the plays you're betting**")
+            st.caption("Stake is in DOLLARS (defaults to Kelly fraction × your bankroll). "
+                       "Edit it to what you actually bet, then tick and log — the bankroll ledger sums these.")
+            _bsig = tuple((str(r["Batter"]), str(r["Side"]), str(r["Odds"]), str(r["Line"]))
+                          for _, r in rdf.iterrows())
+            _bkey = f"bet_base_{date.isoformat()}_{STAT}"
+            _bedkey = f"bet_ed_{date.isoformat()}_{STAT}"
+            if st.session_state.get(_bkey + "_sig") != _bsig:
+                _bb = rdf[["Game", "Batter", "Side", "Line", "Odds"]].copy()
+                _bb.insert(0, "Bet", False)
+                _bb["Stake $"] = rdf["Stake $"].round(2).values
+                st.session_state[_bkey] = _bb
+                st.session_state[_bkey + "_sig"] = _bsig
+                st.session_state.pop(_bedkey, None)
+            bet_edited = st.data_editor(
+                st.session_state[_bkey], key=_bedkey, hide_index=True, use_container_width=True,
+                disabled=["Game", "Batter", "Side", "Line", "Odds"],
+                column_config={"Bet": st.column_config.CheckboxColumn("Bet", help="Tick to log this play"),
+                               "Stake $": st.column_config.NumberColumn("Stake ($)", min_value=0.0, step=1.0, format="$%.2f")})
+            if st.button("✓ Log selected bets", type="primary"):
+                brows = []
+                for _, r in bet_edited.iterrows():
+                    if not bool(r["Bet"]):
+                        continue
+                    try:
+                        stake = float(r["Stake $"])
+                    except (ValueError, TypeError):
+                        stake = 1.0
+                    bid, pitch, ven = bid_map.get((r["Game"], r["Batter"]), (0, "", ""))
+                    brows.append({"date": date.isoformat(), "batter": r["Batter"], "batter_id": bid,
+                                  "pitcher": pitch, "venue": ven, "line": r["Line"], "side": r["Side"],
+                                  "odds": r["Odds"], "stake": stake, "prop": STAT})
+                if brows:
+                    try:
+                        nb = T.log_bets(pd.DataFrame(brows))
+                        _invalidate_tracker_cache()
+                        st.success(f"Logged {nb} bet(s) to the sheet.")
+                    except Exception as ex:
+                        st.error(f"Bet log failed: {ex}")
+                else:
+                    st.warning("Tick at least one play first.")
+
+        # --------------------------------------------------------------------------- #
+        # Multi-book de-vig helper                                                     #
+        # --------------------------------------------------------------------------- #
+        with st.expander("Multi-book no-vig fair line calculator (Pinnacle/FD/DK/MGM/Caesars/Bovada)"):
+            st.caption("Enter over/under prices per book to get a weighted no-vig fair line, like your 'Weighted AVG' sheet.")
+            books = ["Pinnacle", "FanDuel", "DraftKings", "MGM", "Caesars", "Bovada"]
+            default_w = {"Pinnacle": 0.2, "FanDuel": 0.2, "DraftKings": 0.2,
+                         "MGM": 0.1, "Caesars": 0.1, "Bovada": 0.1}
+            book_df = pd.DataFrame({"Book": books,
+                                    "Over": ["" for _ in books],
+                                    "Under": ["" for _ in books],
+                                    "Weight": [default_w[b] for b in books]})
+            be = st.data_editor(book_df, hide_index=True, use_container_width=True)
+            lines = []
+            for _, r in be.iterrows():
+                try:
+                    lines.append(E.BookLine(r["Book"], float(r["Over"]), float(r["Under"]), float(r["Weight"])))
+                except (ValueError, TypeError):
+                    continue
+            if lines:
+                res = E.weighted_no_vig(lines)
+                if res["fair_over"]:
+                    st.metric("Fair Over probability", f"{res['fair_over']*100:.1f}%",
+                              help=f"Fair Over odds ≈ {res['fair_over_american']:+.0f}")
+
+        # --------------------------------------------------------------------------- #
+        # Accuracy tracker                                                            #
+        # --------------------------------------------------------------------------- #
 
 with tab_perf:
     st.divider()
@@ -1229,6 +1236,8 @@ with tab_perf:
     with tc1:
         if st.button("Log projections", help="Logs all props (TB + H+R+RBI + priced Ks) for the loaded slate."):
             try:
+                if not slate:
+                    raise RuntimeError("Load a slate first (top of page).")
                 _slate_date = st.session_state.get("slate_date", date.isoformat())
                 n = _log_all_props(slate, _slate_date)
                 _invalidate_tracker_cache()
