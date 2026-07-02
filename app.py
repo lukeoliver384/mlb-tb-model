@@ -43,26 +43,107 @@ if _stale:
 # --- end guard ---
 
 st.markdown("""<style>
-footer {visibility: hidden;}
-.block-container {max-width: 1320px;}
-h1, h2, h3 {font-weight: 600; letter-spacing: -0.01em;}
-[data-testid="stMetric"] {background: #161B22; border: 1px solid #262C36;
-    border-radius: 12px; padding: 14px 18px;}
-[data-testid="stMetricValue"] {font-weight: 600; color: #F2F4F6;}
-[data-testid="stMetricLabel"] {color: #9AA1AC;}
-section[data-testid="stSidebar"] h2 {font-size: 0.8rem; text-transform: uppercase;
-    letter-spacing: 0.06em; color: #8A9099; font-weight: 600;}
-[data-testid="stDataFrame"] {border: 1px solid #262C36; border-radius: 12px;}
-div.stButton > button {border-radius: 8px; font-weight: 600;}
+/* ---- base ---- */
+:root{
+  --bg:#0D1117; --panel:#161B22; --panel-2:#1C2230; --line:#262C36;
+  --line-soft:#21272F; --txt:#E6EDF3; --muted:#8B949E; --muted-2:#6E7681;
+  --accent:#4C8DFF; --accent-soft:rgba(76,141,255,0.12);
+  --pos:#3FB950; --neg:#F85149;
+}
+footer {visibility:hidden;}
+#MainMenu {visibility:hidden;}
+header[data-testid="stHeader"] {background:transparent;}
+.block-container {max-width:1340px; padding-top:2.2rem; padding-bottom:3rem;}
+html, body, [class*="css"] {font-feature-settings:"tnum","cv02","cv03";}
+h1,h2,h3,h4 {font-weight:650; letter-spacing:-0.015em; color:var(--txt);}
+h2 {font-size:1.28rem;} h3 {font-size:1.08rem;}
+hr {border:none; border-top:1px solid var(--line-soft); margin:1.1rem 0;}
+p, span, label, li {color:var(--txt);}
+
+/* ---- metric cards ---- */
+[data-testid="stMetric"]{
+  background:linear-gradient(180deg,#171D26 0%,#12161D 100%);
+  border:1px solid var(--line); border-radius:14px; padding:15px 18px;
+  box-shadow:0 1px 0 rgba(255,255,255,0.02) inset, 0 2px 8px rgba(0,0,0,0.18);
+  transition:border-color .15s ease, transform .15s ease;
+}
+[data-testid="stMetric"]:hover{border-color:#33405A; transform:translateY(-1px);}
+[data-testid="stMetricValue"]{font-weight:680; color:#F2F5F8; font-size:1.55rem;}
+[data-testid="stMetricLabel"]{color:var(--muted); font-weight:550;
+  text-transform:uppercase; letter-spacing:0.05em; font-size:0.72rem;}
+[data-testid="stMetricDelta"]{font-weight:600;}
+
+/* ---- tabs ---- */
+div[data-testid="stTabs"] div[role="tablist"]{
+  gap:4px; border-bottom:1px solid var(--line); padding-bottom:2px;}
+div[data-testid="stTabs"] button[role="tab"]{
+  background:transparent; border-radius:9px 9px 0 0; padding:9px 16px;
+  color:var(--muted); font-weight:600; font-size:0.92rem; border:none;}
+div[data-testid="stTabs"] button[role="tab"]:hover{
+  color:var(--txt); background:var(--panel);}
+div[data-testid="stTabs"] button[role="tab"][aria-selected="true"]{
+  color:var(--accent); background:var(--accent-soft);
+  box-shadow:inset 0 -2px 0 0 var(--accent);}
+
+/* ---- expanders ---- */
+details[data-testid="stExpander"], div[data-testid="stExpander"]{
+  border:1px solid var(--line); border-radius:12px; background:var(--panel);
+  overflow:hidden; margin-bottom:0.5rem;}
+div[data-testid="stExpander"] summary, details[data-testid="stExpander"] summary{
+  font-weight:600; color:var(--txt); padding:2px 2px;}
+div[data-testid="stExpander"] summary:hover{color:var(--accent);}
+
+/* ---- dataframes / tables ---- */
+[data-testid="stDataFrame"], [data-testid="stTable"]{
+  border:1px solid var(--line); border-radius:12px; overflow:hidden;}
+
+/* ---- buttons ---- */
+div.stButton > button{
+  border-radius:9px; font-weight:600; border:1px solid var(--line);
+  background:var(--panel); color:var(--txt); transition:all .15s ease;}
+div.stButton > button:hover{
+  border-color:var(--accent); color:var(--accent); background:var(--accent-soft);}
+div.stButton > button[kind="primary"]{
+  background:var(--accent); border-color:var(--accent); color:#0B1220;}
+div.stButton > button[kind="primary"]:hover{filter:brightness(1.08); color:#0B1220;}
+div.stDownloadButton > button{border-radius:9px; font-weight:600;}
+
+/* ---- inputs ---- */
+[data-baseweb="input"] input, [data-baseweb="select"] > div,
+.stNumberInput input, .stTextInput input{border-radius:8px;}
+
+/* ---- sidebar ---- */
+section[data-testid="stSidebar"]{
+  background:linear-gradient(180deg,#12161D 0%,#0E1218 100%);
+  border-right:1px solid var(--line);}
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2{
+  font-size:0.74rem; text-transform:uppercase; letter-spacing:0.08em;
+  color:var(--muted-2); font-weight:700;}
+section[data-testid="stSidebar"] div[data-testid="stExpander"]{
+  background:#12171F; border-color:var(--line-soft);}
+
+/* ---- alerts / captions ---- */
+[data-testid="stCaptionContainer"]{color:var(--muted);}
 </style>""", unsafe_allow_html=True)
 
 st.markdown(
-    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:1.1rem;">'
-    '<span style="font-size:1.9rem;line-height:1;">⚾</span>'
-    '<div>'
-    '<div style="font-size:1.45rem;font-weight:600;letter-spacing:-0.02em;line-height:1.1;">MLB Total Bases Model</div>'
-    '<div style="color:#9AA1AC;font-size:0.88rem;">Daily slate projections · log5 + Statcast · park &amp; weather adjusted</div>'
-    '</div></div>',
+    '<div style="display:flex;align-items:center;gap:14px;padding:2px 0 16px;'
+    'margin-bottom:14px;border-bottom:1px solid #262C36;">'
+    '<div style="width:44px;height:44px;border-radius:12px;flex:0 0 auto;'
+    'display:flex;align-items:center;justify-content:center;font-size:1.6rem;'
+    'background:linear-gradient(135deg,#1B2230 0%,#12161D 100%);'
+    'border:1px solid #2B3444;box-shadow:0 2px 8px rgba(0,0,0,0.25);">⚾</div>'
+    '<div style="flex:1;">'
+    '<div style="font-size:1.5rem;font-weight:680;letter-spacing:-0.025em;line-height:1.1;color:#F2F5F8;">'
+    'MLB Prop Model</div>'
+    '<div style="color:#8B949E;font-size:0.86rem;margin-top:2px;">'
+    'Total Bases · Hits+Runs+RBIs · Pitcher Ks &nbsp;—&nbsp; log5 + Statcast, park &amp; weather adjusted</div>'
+    '</div>'
+    '<div style="flex:0 0 auto;align-self:center;font-size:0.72rem;font-weight:600;'
+    'color:#4C8DFF;background:rgba(76,141,255,0.12);border:1px solid rgba(76,141,255,0.28);'
+    'padding:5px 11px;border-radius:20px;letter-spacing:0.03em;">LIVE SLATE</div>'
+    '</div>',
     unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------- #
