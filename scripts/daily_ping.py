@@ -159,6 +159,13 @@ def format_message(date_str, picks, n_games):
         lines.append("\n_(proj. lineup) = today's official batting order isn't posted yet for that game — "
                       "this used the team's last lineup as a placeholder. Re-check once it's confirmed, "
                       "usually 3-4 hrs before first pitch._")
+    game_counts = {}
+    for p in picks:
+        game_counts[p["game"]] = game_counts.get(p["game"], 0) + 1
+    top_game, top_n = max(game_counts.items(), key=lambda kv: kv[1])
+    if top_n >= 3 or (top_n >= 2 and top_n / len(picks) > 0.5):
+        lines.append(f"\n**Correlated:** {top_n} of these {len(picks)} picks are from the same game ({top_game}) "
+                      "— one game script can sweep or wash several of them together.")
     lines.append("_Model leans only — no odds feed yet, so this isn't verified +EV. Price it yourself._")
     return "\n".join(lines)
 

@@ -1193,6 +1193,19 @@ with tab_bet:
             _cmap = {(r["Game"], r["Batter"]): r.get("Conf", 3) for _, r in df.iterrows()}
             rdf["Conf"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
 
+            _value_picks = rdf[rdf["Verdict"] == "VALUE"]
+            if len(_value_picks) >= 2:
+                _game_counts = _value_picks["Game"].value_counts()
+                _top_game, _top_n = _game_counts.index[0], int(_game_counts.iloc[0])
+                _share = _top_n / len(_value_picks)
+                if _top_n >= 3 or (_top_n >= 2 and _share > 0.5):
+                    st.warning(
+                        f"{_top_n} of your {len(_value_picks)} VALUE picks are in the same game ({_top_game}) — "
+                        "correlated risk. One game script (a blown-up starter, a rainout, a bad umpire day) can "
+                        "swing several legs together instead of failing independently. Kelly sizing treats each "
+                        "pick as its own bet and doesn't discount for this — consider trimming stakes on the "
+                        "shared-game legs.")
+
             _val = rdf[rdf["Model EV"] > 0].sort_values("Model EV", ascending=False).head(5)
             if not _val.empty:
                 st.subheader("Top 5 value plays")
