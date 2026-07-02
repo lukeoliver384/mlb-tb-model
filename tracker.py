@@ -889,6 +889,104 @@ def calibration_temperature(log: pd.DataFrame):
     return round(T_eff, 3), n
 
 
+def _sigmoid(z):
+    import math
+    if z >= 0:
+        return 1.0 / (1.0 + math.exp(-z))
+    ez = math.exp(z)
+    return ez / (1.0 + ez)
+
+
+def fit_platt_scaling(log: pd.DataFrame, min_n: int = 30, ridge: float = 1.0):
+    """
+    Fit 2-parameter Platt scaling from graded projections: calibrated_p =
+    sigmoid(A * logit(raw_p) + B). This generalizes calibration_temperature()'s
+    single 'temperature' (equivalent to fixing A = 1/T, B = 0) with an added
+    bias term B, which corrects a systematic Over/Under skew that pure
+    temperature scaling can't (e.g. the model running hot on Overs specifically,
+    not just overconfident on both sides equally).
+
+    Fit via Newton-Raphson on the 2-parameter logistic log-loss (converges in
+    a handful of iterations; no numpy/sklearn needed for 1 feature). A small
+    ridge penalty keeps it stable on thin samples. Regularizes the fitted
+    (A, B) toward the identity (A=1, B=0 = no change) by sample size, same
+    pattern as calibration_temperature, so early data barely moves it.
+
+    Returns a dict: A, B (the effective, regularized values to apply), n
+    (resolved legs used), logloss (with the fit), logloss_uncalibrated (raw
+    model, for comparison — lower logloss = better).
+    """
+    import math
+    identity = {"A": 1.0, "B": 0.0, "n": 0, "logloss": None, "logloss_uncalibrated": None}
+    if log is None or log.empty:
+        return identity
+    g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    g["p"] = pd.to_numeric(g["p_over"], errors="coerce")
+    g["y"] = pd.to_numeric(g["over_hit"], errors="coerce")
+    g = g.dropna(subset=["p", "y"])
+    n = len(g)
+    if n < min_n:
+        return {**identity, "n": n}
+
+    xs = [math.log(min(max(float(p), 1e-4), 1 - 1e-4) / (1 - min(max(float(p), 1e-4), 1 - 1e-4)))
+          for p in g["p"]]
+    ys = [float(y) for y in g["y"]]
+
+    def logloss(A, B):
+        s = 0.0
+        for x, y in zip(xs, ys):
+            q = min(max(_sigmoid(A * x + B), 1e-6), 1 - 1e-6)
+            s += -(y * math.log(q) + (1 - y) * math.log(1 - q))
+        return s / n
+
+    ll_uncal = logloss(1.0, 0.0)
+
+    A, B = 1.0, 0.0
+    for _ in range(25):
+        gA = gB = 0.0
+        hAA = hAB = hBB = 0.0
+        for x, y in zip(xs, ys):
+            q = _sigmoid(A * x + B)
+            err = q - y
+            w = q * (1 - q)
+            gA += err * x
+            gB += err
+            hAA += w * x * x
+            hAB += w * x
+            hBB += w
+        gA, gB = gA / n, gB / n
+        # ridge on A only (toward 1.0), so a thin/degenerate sample can't blow up
+        gA += ridge * (A - 1.0) / n
+        hAA += ridge / n
+        hAA, hAB, hBB = hAA / n, hAB / n, hBB / n
+        det = hAA * hBB - hAB * hAB
+        if abs(det) < 1e-12:
+            break
+        dA = (hBB * gA - hAB * gB) / det
+        dB = (hAA * gB - hAB * gA) / det
+        A -= dA
+        B -= dB
+        if abs(dA) < 1e-8 and abs(dB) < 1e-8:
+            break
+
+    ll_fit = logloss(A, B)
+    # regularize toward identity by sample size (full weight ~200 resolved legs),
+    # same convention as calibration_temperature
+    w = min(1.0, n / 400.0)
+    A_eff = 1.0 + (A - 1.0) * w
+    B_eff = 0.0 + (B - 0.0) * w
+    return {"A": round(A_eff, 4), "B": round(B_eff, 4), "n": n,
+            "logloss": round(ll_fit, 4), "logloss_uncalibrated": round(ll_uncal, 4)}
+
+
+def apply_platt(p, A, B):
+    if p is None or not (0 < p < 1):
+        return p
+    import math
+    x = math.log(p / (1 - p))
+    return _sigmoid(A * x + B)
+
+
 # --------------------------------------------------------------------------- #
 # Persistent settings (e.g. starting bankroll)                                #
 # --------------------------------------------------------------------------- #

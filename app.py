@@ -185,7 +185,7 @@ _seed("ui_line", 1.5); _seed("ui_tossup", 0.03); _seed("ui_minedge", 0.05)
 _seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0); _seed("ui_confstake", True)
 _seed("ui_regtb", int(E.REG_K_PA)); _seed("ui_reghrr", int(E.REG_K_PA)); _seed("ui_regkmod", int(getattr(E, "REG_KMODEL", 70)))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
-_seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
+_seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False); _seed("ui_platt", False)
 _seed("ui_hrrdisp", 1.35); _seed("ui_kdisp", 1.4); _seed("ui_lineupctx", 0.5); _seed("ui_tbtemp", 1.5); _seed("ui_hrrtemp", 2.0); _seed("ui_ktemp", 1.4); _seed("ui_autocal", False)
 _seed("ui_park", True); _seed("ui_parkstr", 1.0); _seed("ui_weather", False); _seed("ui_weatherstr", 1.0)
 _seed("ui_autobp", True); _seed("ui_spshare", 1.0); _seed("ui_bprate", 0.345)
@@ -243,15 +243,24 @@ with st.sidebar:
         st.divider()
         use_calibration = st.checkbox("Apply confidence compression", key="ui_calib",
                                       help="Master on/off. Pulls probabilities toward 50% to fix overconfidence. Off = raw model probabilities.")
-        auto_cal = st.checkbox("Auto-fit temperature from graded data", key="ui_autocal", disabled=not use_calibration,
+        use_platt = st.checkbox("Use fitted calibration (Platt, all props combined)", key="ui_platt",
+                                disabled=not use_calibration,
+                                help="Fits BOTH a confidence scale and a directional bias (e.g. the model running "
+                                     "hot on Overs specifically) from graded results via logistic regression — "
+                                     "strictly more flexible than temperature scaling below. Needs 30+ graded "
+                                     "legs to activate; takes priority over auto-fit/manual temperature when on. "
+                                     "Note: doesn't yet feed the Paper Bankroll tab's Kelly staking, which still "
+                                     "uses temperature scaling.")
+        auto_cal = st.checkbox("Auto-fit temperature from graded data", key="ui_autocal",
+                               disabled=(not use_calibration) or use_platt,
                                help="Fit the temperature from results instead of setting it by hand.")
         st.caption("Per-prop compression temperature (1.0 = none; higher pulls toward 50%):")
         tb_temp = st.slider("TB temperature", 1.0, 5.0, step=0.05, key="ui_tbtemp",
-                            disabled=(not use_calibration) or auto_cal)
+                            disabled=(not use_calibration) or auto_cal or use_platt)
         hrr_temp = st.slider("H+R+RBI temperature", 1.0, 5.0, step=0.05, key="ui_hrrtemp",
-                             disabled=(not use_calibration) or auto_cal)
+                             disabled=(not use_calibration) or auto_cal or use_platt)
         k_temp = st.slider("Ks temperature", 1.0, 5.0, step=0.05, key="ui_ktemp",
-                           disabled=(not use_calibration) or auto_cal)
+                           disabled=(not use_calibration) or auto_cal or use_platt)
         TEMPS = {"TB": tb_temp, "HRR": hrr_temp, "K": k_temp}
         hrr_disp = st.slider("H+R+RBI variance (lower = more confident)", 1.0, 2.0, step=0.05, key="ui_hrrdisp",
                              help="Overdispersion for H+R+RBI. 1.0 = Poisson (most confident); higher spreads probabilities toward 50%. Tune via the confidence-vs-actual tracker.")
@@ -287,7 +296,7 @@ with st.sidebar:
 
 # Persist sidebar settings (one write only when something changed)
 _uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink", "ui_confstake",
-           "ui_regtb", "ui_reghrr", "ui_regkmod", "ui_splits", "ui_homeaway", "ui_components", "ui_calib", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_tbtemp", "ui_hrrtemp", "ui_ktemp",
+           "ui_regtb", "ui_reghrr", "ui_regkmod", "ui_splits", "ui_homeaway", "ui_components", "ui_calib", "ui_platt", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_tbtemp", "ui_hrrtemp", "ui_ktemp",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
            "ui_kwhiff", "ui_wkwhiff"]
@@ -414,7 +423,19 @@ if not slate:
             "The Performance, Paper Bankroll, Closing Lines and Game Day tabs work without a loaded slate.")
 
 T_cal, T_caln = 1.0, 0
-if use_calibration and auto_cal:
+platt_fit = None
+platt_active = False
+if use_calibration and use_platt:
+    try:
+        platt_fit = T.fit_platt_scaling(_log_cached())
+    except Exception:
+        platt_fit = None
+    platt_active = bool(platt_fit and platt_fit.get("n", 0) >= 30)
+    # TEMP_MAP still feeds Paper Bankroll's Kelly staking, which isn't Platt-aware yet;
+    # fall back to no-op temperature there rather than silently mismatching the live P(Over).
+    T_total = 1.0
+    TEMP_MAP = {pp: 1.0 for pp in ("TB", "HRR", "K")}
+elif use_calibration and auto_cal:
     try:
         T_cal, T_caln = T.calibration_temperature(_log_cached())
     except Exception:
@@ -429,13 +450,25 @@ else:
     TEMP_MAP = {pp: 1.0 for pp in ("TB", "HRR", "K")}
 
 def _calibrate(p):
+    if platt_active and (0 < p < 1):
+        return T.apply_platt(p, platt_fit["A"], platt_fit["B"])
     if T_total == 1.0 or not (0 < p < 1):
         return p
     lp = math.log(p / (1 - p)) / T_total
     return 1.0 / (1.0 + math.exp(-lp))
 
 if use_calibration:
-    if auto_cal:
+    if use_platt:
+        if platt_active:
+            better = "better" if platt_fit["logloss"] < platt_fit["logloss_uncalibrated"] else "worse"
+            st.caption(f"Confidence compression: FITTED (Platt) A={platt_fit['A']} B={platt_fit['B']} "
+                       f"from {platt_fit['n']} graded legs (all props) — log-loss {platt_fit['logloss']} "
+                       f"vs {platt_fit['logloss_uncalibrated']} uncalibrated ({better}).")
+        else:
+            _pn = platt_fit["n"] if platt_fit else 0
+            st.caption(f"Fitted calibration needs 30+ graded legs to activate (have {_pn}) — "
+                       "showing raw model probabilities until then.")
+    elif auto_cal:
         st.caption(f"Confidence compression: AUTO {round(T_cal, 3)} from {T_caln} graded legs (all props).")
     else:
         st.caption(f"Confidence compression (per prop): TB {tb_temp} · H+R+RBI {hrr_temp} · Ks {k_temp}. "
