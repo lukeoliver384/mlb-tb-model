@@ -3,3 +3,6 @@ __pycache__/
 .wtest
 .streamlit/secrets.toml
 _pf_tmp.json
+tracker_log.csv
+tracker_bets.csv
+tracker_odds.csv

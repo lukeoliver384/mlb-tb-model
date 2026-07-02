@@ -361,16 +361,22 @@ with colB:
         st.caption(f"Last loaded {_last_loaded}")
 
 if go:
-    with st.spinner("Pulling lineups, stats, and matchups…"):
-        try:
-            st.session_state["slate"] = load(date.isoformat(), int(season), use_recent, int(recent_days), use_weather)
-            st.session_state["slate_date"] = date.isoformat()
-            st.session_state["savant"] = load_savant(int(season)) if use_statcast else ({}, {})
-            st.session_state["arsenal"] = load_arsenal(int(season)) if use_arsenal else ({}, {})
-            st.session_state["whiff"] = load_whiff(int(season)) if use_kwhiff else {}
-            st.session_state["slate_loaded_at"] = dt.datetime.now().strftime("%I:%M %p").lstrip("0")
-        except Exception as ex:
-            st.error(f"Could not load slate: {ex}")
+    try:
+        st.session_state["slate"] = load(date.isoformat(), int(season), use_recent, int(recent_days), use_weather)
+        st.session_state["slate_date"] = date.isoformat()
+        st.session_state["savant"] = load_savant(int(season)) if use_statcast else ({}, {})
+        st.session_state["arsenal"] = load_arsenal(int(season)) if use_arsenal else ({}, {})
+        st.session_state["whiff"] = load_whiff(int(season)) if use_kwhiff else {}
+        st.session_state["slate_loaded_at"] = dt.datetime.now().strftime("%I:%M %p").lstrip("0")
+        st.session_state["_just_loaded"] = True
+        st.rerun()
+    except Exception as ex:
+        st.error(f"Could not load slate: {ex}")
+
+# Rerunning right after a successful load (so the header badge reflects the new
+# state immediately) resets `go` to False on the replay — fold the one-shot flag
+# back in so the rebuild logic below still treats this as a fresh load.
+go = go or st.session_state.pop("_just_loaded", False)
 
 slate = st.session_state.get("slate")
 savant_bat, savant_pit = st.session_state.get("savant", ({}, {}))
