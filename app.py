@@ -19,7 +19,7 @@ import park_factors as PF
 import data as D
 import tracker as T
 
-st.set_page_config(page_title="MLB TB Model", page_icon="⚾", layout="wide")
+st.set_page_config(page_title="MLB TB Model", layout="wide")
 
 # --- Deployment version guard: catch stale/partial uploads with a clear message ---
 import inspect as _inspect
@@ -34,7 +34,7 @@ except Exception:
     _stale.append("engine.project_hrr")
 if _stale:
     st.error(
-        "⚠️ The server is running an out-of-date **engine.py** (missing: "
+        "The server is running an out-of-date **engine.py** (missing: "
         + ", ".join(_stale)
         + "). Re-upload engine.py (and the full file set) to GitHub, then reboot from "
         "Manage app → Reboot."
@@ -43,6 +43,7 @@ if _stale:
 # --- end guard ---
 
 st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,650;14..32,700&display=swap');
 /* ---- base ---- */
 :root{
   --bg:#0D1117; --panel:#161B22; --panel-2:#1C2230; --line:#262C36;
@@ -54,7 +55,9 @@ footer {visibility:hidden;}
 #MainMenu {visibility:hidden;}
 header[data-testid="stHeader"] {background:transparent;}
 .block-container {max-width:1340px; padding-top:2.2rem; padding-bottom:3rem;}
-html, body, [class*="css"] {font-feature-settings:"tnum","cv02","cv03";}
+html, body, [class*="css"] {
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-feature-settings:"tnum","cv02","cv03";}
 h1,h2,h3,h4 {font-weight:650; letter-spacing:-0.015em; color:var(--txt);}
 h2 {font-size:1.28rem;} h3 {font-size:1.08rem;}
 hr {border:none; border-top:1px solid var(--line-soft); margin:1.1rem 0;}
@@ -200,7 +203,7 @@ with st.sidebar:
     proj_col = {"TB": "Proj TB", "HRR": "Proj HRR", "K": "Proj Ks"}[STAT]
 
     st.header("Settings")
-    with st.expander("Lines & staking", icon="💰", expanded=False):
+    with st.expander("Lines & staking", icon=":material/payments:", expanded=False):
         default_line = st.number_input("Default TB line", 0.5, 5.5, step=0.5, key="ui_line")
         tossup_band = st.slider("Toss-up band (± from 50%)", 0.0, 0.10, step=0.01, key="ui_tossup",
                                 help="Within this of 50% = 'No clear lean'.")
@@ -225,7 +228,7 @@ with st.sidebar:
             except Exception:
                 pass
 
-    with st.expander("Model & matchup", icon="🧮", expanded=False):
+    with st.expander("Model & matchup", icon=":material/tune:", expanded=False):
         st.caption("Regression-to-league sample size, per metric (each stat stabilizes at a different point):")
         reg_tb = st.number_input("Regression — Total Bases (PA)", 0, 600, step=5, key="ui_regtb",
                                  help="TB/SLG stabilizes slowly — ~175 PA.")
@@ -257,19 +260,19 @@ with st.sidebar:
         lineup_ctx = st.slider("H+R+RBI lineup-spot context", 0.0, 1.0, step=0.05, key="ui_lineupctx",
                                help="Re-rates a hitter's R/RBI for today's batting slot (RBI up in the middle, runs up at the top). Damped because season rates already reflect a player's usual spot. 0 = off.")
 
-    with st.expander("Park & weather", icon="🌤️", expanded=False):
+    with st.expander("Park & weather", icon=":material/stadium:", expanded=False):
         use_park = st.checkbox("Apply park factors", key="ui_park")
         park_strength = st.slider("Park factor strength", 0.0, 1.5, step=0.05, key="ui_parkstr", disabled=not use_park)
         use_weather = st.checkbox("Apply weather (Open-Meteo)", key="ui_weather",
                                   help="Per-game temp + wind out/in on HR/XBH. Domes auto-neutral.")
         weather_strength = st.slider("Weather strength", 0.0, 1.5, step=0.05, key="ui_weatherstr", disabled=not use_weather)
 
-    with st.expander("Bullpen split", icon="⚾", expanded=False):
+    with st.expander("Bullpen split", icon=":material/sports_baseball:", expanded=False):
         auto_bullpen = st.checkbox("Auto starter/bullpen split", key="ui_autobp")
         sp_share_manual = st.slider("Manual share of PAs vs starter", 0.40, 1.00, step=0.05, key="ui_spshare", disabled=auto_bullpen)
         bullpen_rate = st.number_input("Bullpen TB/BF (later PAs)", 0.28, 0.42, step=0.005, format="%.3f", key="ui_bprate")
 
-    with st.expander("Statcast & recent form", icon="📈", expanded=False):
+    with st.expander("Statcast & recent form", icon=":material/monitoring:", expanded=False):
         use_statcast = st.checkbox("Blend Statcast expected (xSLG)", key="ui_statcast")
         w_statcast = st.slider("Weight on expected vs actual", 0.0, 1.0, step=0.05, key="ui_wstatcast", disabled=not use_statcast)
         use_arsenal = st.checkbox("Pitch-type matchup (arsenal)", key="ui_arsenal",
@@ -788,7 +791,7 @@ if df is not None and not df.empty:
 # --------------------------------------------------------------------------- #
 # Summary + projections                                                       #
 # --------------------------------------------------------------------------- #
-tab_bet, tab_perf, tab_paper, tab_clv, tab_gameday = st.tabs(["📊 Projections & Odds", "📈 Performance", "💰 Paper Bankroll", "🎯 Closing Lines (CLV)", "📰 Game Day"])
+tab_bet, tab_perf, tab_paper, tab_clv, tab_gameday = st.tabs(["Projections & Odds", "Performance", "Paper Bankroll", "Closing Lines (CLV)", "Game Day"])
 
 with tab_bet:
     if df is None or df.empty:
@@ -806,7 +809,7 @@ with tab_bet:
         _exp_n = sum(1 for _mu in slate for _b in (_mu.home_lineup + _mu.away_lineup)
                      if getattr(_b, "expected", False))
         if _exp_n:
-            st.warning(f"⚠ {_exp_n} hitters are from PROJECTED lineups (each team's last game), not today's "
+            st.warning(f"{_exp_n} hitters are from PROJECTED lineups (each team's last game), not today's "
                        "confirmed order. Get your picks in now, then reload when official lineups post to update "
                        "the changed spots (usually 7–9).")
         view_cols = ["Game", "Batter", "Slot", "B", "vs Pitcher", "P", "Line",
@@ -1213,7 +1216,7 @@ with tab_bet:
                 disabled=["Game", "Batter", "Side", "Line", "Odds"],
                 column_config={"Bet": st.column_config.CheckboxColumn("Bet", help="Tick to log this play"),
                                "Stake $": st.column_config.NumberColumn("Stake ($)", min_value=0.0, step=1.0, format="$%.2f")})
-            if st.button("✓ Log selected bets", type="primary"):
+            if st.button("Log selected bets", type="primary"):
                 brows = []
                 for _, r in bet_edited.iterrows():
                     if not bool(r["Bet"]):
@@ -1517,7 +1520,7 @@ with tab_paper:
                                          stake_mode=_sm, kelly_mult=float(kelly_mult), temp_map=TEMP_MAP,
                                          start_units=_pstart, max_frac=float(max_stake) / 100.0, mode=_gm2)
         except TypeError:
-            st.error("⚠ The server's tracker.py is out of date (paper_sim is missing the 'mode' argument). "
+            st.error("The server's tracker.py is out of date (paper_sim is missing the 'mode' argument). "
                      "Re-upload tracker.py to GitHub and reboot the app (Manage app → Reboot).")
             return
         if not _psum.get("n"):
