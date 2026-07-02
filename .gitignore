@@ -6,4 +6,5 @@ _pf_tmp.json
 tracker_log.csv
 tracker_bets.csv
 tracker_odds.csv
+tracker.db
 .claude/settings.local.json

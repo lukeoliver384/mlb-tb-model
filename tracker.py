@@ -5,16 +5,21 @@ Logs each day's projections and auto-grades them against actual total bases from
 the MLB API, so you can see projection error and calibration over time.
 
 Storage is pluggable:
-  * Google Sheet  — persistent + viewable. Add a service-account key to Streamlit
-    secrets as [gcp_service_account] and (optionally) tracker_sheet_name.
-  * Fallback      — session + a local CSV (works immediately, but the hosted app
-    won't persist it across restarts). Add the Google Sheet to make it permanent.
+  * Google Sheet  — persistent + viewable, and the only tier that survives a
+    Streamlit Cloud reboot (its filesystem is ephemeral). Add a service-account
+    key to Streamlit secrets as [gcp_service_account] and (optionally)
+    tracker_sheet_name.
+  * SQLite        — local fallback (tracker.db, via stdlib sqlite3 + pandas'
+    to_sql/read_sql — no new dependency). Used automatically when no Google
+    Sheet is configured, e.g. running locally. One-time-migrates any existing
+    tracker_*.csv files on first use so earlier local runs aren't lost.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import os
+import sqlite3
 
 import pandas as pd
 import streamlit as st
@@ -40,6 +45,51 @@ BET_CSV = "tracker_bets.csv"
 
 ODDS_COLUMNS = ["date", "prop", "game", "batter", "line", "over", "under"]
 ODDS_CSV = "tracker_odds.csv"
+
+
+# --------------------------------------------------------------------------- #
+# SQLite backend (local fallback when no Google Sheet is configured)          #
+# --------------------------------------------------------------------------- #
+DB_PATH = "tracker.db"
+_CSV_MIGRATE_MAP = {"log": (LOG_CSV, LOG_COLUMNS), "bets": (BET_CSV, BET_COLUMNS),
+                     "odds": (ODDS_CSV, ODDS_COLUMNS)}
+
+
+def _sqlite_conn():
+    return sqlite3.connect(DB_PATH)
+
+
+def _sqlite_table_exists(conn, table):
+    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+    return cur.fetchone() is not None
+
+
+def _sqlite_read(table, columns):
+    """Read a table, migrating a legacy CSV of the same name in on first use."""
+    try:
+        with _sqlite_conn() as conn:
+            if not _sqlite_table_exists(conn, table):
+                csv_path, _ = _CSV_MIGRATE_MAP.get(table, (None, None))
+                if csv_path and os.path.exists(csv_path):
+                    try:
+                        pd.read_csv(csv_path).reindex(columns=columns).to_sql(table, conn, index=False)
+                    except Exception:
+                        return None
+                else:
+                    return None
+            df = pd.read_sql(f"SELECT * FROM {table}", conn)
+        return df.reindex(columns=columns)
+    except Exception:
+        return None
+
+
+def _sqlite_write(table, df):
+    try:
+        with _sqlite_conn() as conn:
+            df.to_sql(table, conn, if_exists="replace", index=False)
+        return True
+    except Exception:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -71,7 +121,7 @@ def _gsheet():
 
 
 def backend_name() -> str:
-    return "Google Sheet" if _gsheet() else "local (session/CSV — not persistent)"
+    return "Google Sheet" if _gsheet() else "SQLite (local — not persistent on Streamlit Cloud)"
 
 
 def read_log() -> pd.DataFrame:
@@ -85,11 +135,8 @@ def read_log() -> pd.DataFrame:
             df = None
     if df is None and "tracker_log" in st.session_state:
         df = st.session_state["tracker_log"].copy()
-    if df is None and os.path.exists(LOG_CSV):
-        try:
-            df = pd.read_csv(LOG_CSV)
-        except Exception:
-            df = None
+    if df is None:
+        df = _sqlite_read("log", LOG_COLUMNS)
     if df is None or df.empty:
         return pd.DataFrame(columns=LOG_COLUMNS)
     return df.reindex(columns=LOG_COLUMNS)
@@ -107,11 +154,9 @@ def write_log(df: pd.DataFrame) -> str:
         except Exception:
             pass
     st.session_state["tracker_log"] = df.copy()
-    try:
-        df.to_csv(LOG_CSV, index=False)
-    except Exception:
-        pass
-    return "local"
+    if _sqlite_write("log", df):
+        return "SQLite"
+    return "session-only"
 
 
 # --------------------------------------------------------------------------- #
@@ -441,11 +486,9 @@ def read_bets() -> pd.DataFrame:
             pass
     if "bet_log" in st.session_state:
         return st.session_state["bet_log"].copy().reindex(columns=BET_COLUMNS)
-    if os.path.exists(BET_CSV):
-        try:
-            return pd.read_csv(BET_CSV).reindex(columns=BET_COLUMNS)
-        except Exception:
-            pass
+    df = _sqlite_read("bets", BET_COLUMNS)
+    if df is not None:
+        return df
     return pd.DataFrame(columns=BET_COLUMNS)
 
 
@@ -460,11 +503,9 @@ def write_bets(df: pd.DataFrame) -> str:
         except Exception:
             pass
     st.session_state["bet_log"] = df.copy()
-    try:
-        df.to_csv(BET_CSV, index=False)
-    except Exception:
-        pass
-    return "local"
+    if _sqlite_write("bets", df):
+        return "SQLite"
+    return "session-only"
 
 
 def log_bets(bets_df: pd.DataFrame) -> int:
@@ -646,11 +687,10 @@ def read_odds() -> dict:
             rows = None
     if rows is None and "odds_rows" in st.session_state:
         rows = st.session_state["odds_rows"]
-    if rows is None and os.path.exists(ODDS_CSV):
-        try:
-            rows = pd.read_csv(ODDS_CSV).to_dict("records")
-        except Exception:
-            rows = None
+    if rows is None:
+        df = _sqlite_read("odds", ODDS_COLUMNS)
+        if df is not None:
+            rows = df.to_dict("records")
     out = {}
     for r in (rows or []):
         k = (str(r.get("date", "")), str(r.get("prop", "")),
@@ -679,11 +719,9 @@ def write_odds(store: dict) -> str:
         except Exception:
             pass
     st.session_state["odds_rows"] = [dict(zip(ODDS_COLUMNS, r)) for r in rows]
-    try:
-        pd.DataFrame(rows, columns=ODDS_COLUMNS).to_csv(ODDS_CSV, index=False)
-    except Exception:
-        pass
-    return "local"
+    if _sqlite_write("odds", pd.DataFrame(rows, columns=ODDS_COLUMNS)):
+        return "SQLite"
+    return "session-only"
 
 
 def reset_grades():
@@ -885,8 +923,16 @@ def get_setting(key, default=None):
                 if str(r.get("key")) == key:
                     st.session_state[skey] = r.get("value")
                     return r.get("value")
+            return default
     except Exception:
         pass
+    df = _sqlite_read("settings", SETTINGS_COLUMNS)
+    if df is not None:
+        hit = df[df["key"].astype(str) == str(key)]
+        if not hit.empty:
+            val = hit.iloc[-1]["value"]
+            st.session_state[skey] = val
+            return val
     return default
 
 
@@ -900,5 +946,10 @@ def set_setting(key, value):
             d[str(key)] = value
             ws.clear()
             ws.update([SETTINGS_COLUMNS] + [[k, v] for k, v in d.items()])
+            return
         except Exception:
             pass
+    df = _sqlite_read("settings", SETTINGS_COLUMNS)
+    d = {} if df is None else dict(zip(df["key"].astype(str), df["value"]))
+    d[str(key)] = value
+    _sqlite_write("settings", pd.DataFrame(list(d.items()), columns=SETTINGS_COLUMNS))
