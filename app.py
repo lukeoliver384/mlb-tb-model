@@ -88,9 +88,9 @@ div[data-testid="stTabs"] button[role="tab"][aria-selected="true"]{
 /* ---- expanders ---- */
 details[data-testid="stExpander"], div[data-testid="stExpander"]{
   border:1px solid var(--line); border-radius:12px; background:var(--panel);
-  overflow:hidden; margin-bottom:0.5rem;}
+  overflow:hidden; margin-bottom:0.5rem; transition:border-color .15s ease, background .15s ease;}
 div[data-testid="stExpander"] summary, details[data-testid="stExpander"] summary{
-  font-weight:600; color:var(--txt); padding:2px 2px;}
+  font-weight:600; color:var(--txt); padding:10px 14px;}
 div[data-testid="stExpander"] summary:hover{color:var(--accent);}
 
 /* ---- dataframes / tables ---- */
@@ -121,7 +121,11 @@ section[data-testid="stSidebar"] h2{
   font-size:0.74rem; text-transform:uppercase; letter-spacing:0.08em;
   color:var(--muted-2); font-weight:700;}
 section[data-testid="stSidebar"] div[data-testid="stExpander"]{
-  background:#12171F; border-color:var(--line-soft);}
+  background:#12171F; border-color:var(--line-soft); margin-bottom:8px;}
+section[data-testid="stSidebar"] div[data-testid="stExpander"]:hover{
+  background:#161D28; border-color:#2B3444;}
+section[data-testid="stSidebar"] div[data-testid="stExpander"] summary p{
+  font-size:0.86rem;}
 
 /* ---- alerts / captions ---- */
 [data-testid="stCaptionContainer"]{color:var(--muted);}
@@ -195,7 +199,8 @@ with st.sidebar:
     STAT = "TB" if prop.startswith("Total") else ("HRR" if prop.startswith("Hits") else "K")
     proj_col = {"TB": "Proj TB", "HRR": "Proj HRR", "K": "Proj Ks"}[STAT]
 
-    with st.expander("Lines & staking", expanded=False):
+    st.header("Settings")
+    with st.expander("Lines & staking", icon="💰", expanded=False):
         default_line = st.number_input("Default TB line", 0.5, 5.5, step=0.5, key="ui_line")
         tossup_band = st.slider("Toss-up band (± from 50%)", 0.0, 0.10, step=0.01, key="ui_tossup",
                                 help="Within this of 50% = 'No clear lean'.")
@@ -220,7 +225,7 @@ with st.sidebar:
             except Exception:
                 pass
 
-    with st.expander("Model & matchup", expanded=False):
+    with st.expander("Model & matchup", icon="🧮", expanded=False):
         st.caption("Regression-to-league sample size, per metric (each stat stabilizes at a different point):")
         reg_tb = st.number_input("Regression — Total Bases (PA)", 0, 600, step=5, key="ui_regtb",
                                  help="TB/SLG stabilizes slowly — ~175 PA.")
@@ -228,9 +233,11 @@ with st.sidebar:
                                   help="H+R+RBI rates; ~175 PA, same ballpark as TB. Calibration is handled by the per-prop temperature.")
         reg_kmod = st.number_input("Regression — Strikeouts (BF)", 0, 400, step=5, key="ui_regkmod",
                                    help="K rate stabilizes fast (~70 BF). Kept separate so low-K pitchers aren't washed to league.")
+        st.divider()
         use_splits = st.checkbox("Use L/R handedness splits", key="ui_splits")
         use_homeaway = st.checkbox("Home/away splits (regressed)", key="ui_homeaway")
         use_components = st.checkbox("Per-event log5 (advanced)", key="ui_components")
+        st.divider()
         use_calibration = st.checkbox("Apply confidence compression", key="ui_calib",
                                       help="Master on/off. Pulls probabilities toward 50% to fix overconfidence. Off = raw model probabilities.")
         auto_cal = st.checkbox("Auto-fit temperature from graded data", key="ui_autocal", disabled=not use_calibration,
@@ -250,19 +257,19 @@ with st.sidebar:
         lineup_ctx = st.slider("H+R+RBI lineup-spot context", 0.0, 1.0, step=0.05, key="ui_lineupctx",
                                help="Re-rates a hitter's R/RBI for today's batting slot (RBI up in the middle, runs up at the top). Damped because season rates already reflect a player's usual spot. 0 = off.")
 
-    with st.expander("Park & weather", expanded=False):
+    with st.expander("Park & weather", icon="🌤️", expanded=False):
         use_park = st.checkbox("Apply park factors", key="ui_park")
         park_strength = st.slider("Park factor strength", 0.0, 1.5, step=0.05, key="ui_parkstr", disabled=not use_park)
         use_weather = st.checkbox("Apply weather (Open-Meteo)", key="ui_weather",
                                   help="Per-game temp + wind out/in on HR/XBH. Domes auto-neutral.")
         weather_strength = st.slider("Weather strength", 0.0, 1.5, step=0.05, key="ui_weatherstr", disabled=not use_weather)
 
-    with st.expander("Bullpen split", expanded=False):
+    with st.expander("Bullpen split", icon="⚾", expanded=False):
         auto_bullpen = st.checkbox("Auto starter/bullpen split", key="ui_autobp")
         sp_share_manual = st.slider("Manual share of PAs vs starter", 0.40, 1.00, step=0.05, key="ui_spshare", disabled=auto_bullpen)
         bullpen_rate = st.number_input("Bullpen TB/BF (later PAs)", 0.28, 0.42, step=0.005, format="%.3f", key="ui_bprate")
 
-    with st.expander("Statcast & recent form", expanded=False):
+    with st.expander("Statcast & recent form", icon="📈", expanded=False):
         use_statcast = st.checkbox("Blend Statcast expected (xSLG)", key="ui_statcast")
         w_statcast = st.slider("Weight on expected vs actual", 0.0, 1.0, step=0.05, key="ui_wstatcast", disabled=not use_statcast)
         use_arsenal = st.checkbox("Pitch-type matchup (arsenal)", key="ui_arsenal",
