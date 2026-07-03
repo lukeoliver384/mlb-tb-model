@@ -1,5 +1,66 @@
 # Handoff — MLB TB Prop Model
 
+## 2026-07-03 session — automatic odds, backtest, and a parallel web stack
+
+Focus: get **automatic Total Bases odds into the existing Streamlit app**, build a
+point-in-time backtest, and stand up a first version of a future standalone web
+product. **`app.py` is unchanged except ONE additive feature** (a Bovada
+auto-fill button in "Add your odds") — all tabs, graphs, and tracking untouched.
+
+### Repo structure decision
+One repo (`mlb-tb-model`) holds both the Streamlit app AND the new backend/web
+files. Intentional: they share `data.py` / `engine.py` / `odds_scrape.py` /
+`tracker.py`, and Streamlit Cloud runs only `app.py` and ignores the rest. The
+new web app gets its own host later; no split needed.
+
+### What's built and where
+- **`odds_scrape.py`** — Bovada-first Total Bases scraper (the book the user
+  actually uses). Pulls the per-game Player Props feed, parses
+  `Total Bases - Player (TEAM)`, cleans names, handles `EVEN`=+100, matches to
+  the slate, de-vigs a Pinnacle-anchored consensus, picks best price, collapses
+  to the app's odds-store shape. DK/FD/MGM/Pinnacle = stubbed adapters. Verified
+  against a real Bovada dump: 112 TB markets parsed, names clean, tricky
+  accented/suffix names matched 8/8. Coverage: Bovada only prices ~112 hitters
+  per slate (not all 234); alt lines (0.5/2.5) live on a feed we don't yet capture.
+- **Streamlit integration** — "⚡ Auto-fill Bovada odds" button above the
+  "Add your odds" editor in `app.py` (TB only). Writes into the existing
+  `odds_store` + `T.write_odds`, pops the editor base to force a rebuild. Nothing
+  else in `app.py` changed.
+- **`backtest.py`** — point-in-time, no look-ahead: reconstructs each player's
+  stats as of (game date − 1) via `byDateRange`, reuses `daily_ping.project_batter`
+  verbatim, grades vs actual TB, reports MAE / directional acc / Brier / log-loss
+  + reliability, fits the existing Platt calibration. `--write-log` feeds the
+  tracker so the Calibration tab activates. Splits fall back to overall
+  (conservative); Savant off by default (avoids leakage).
+- **`server.py` (FastAPI) + `webapp/index.html`** — a SEPARATE, future-facing
+  product, NOT a replacement. Serves `/api/slate`, `/api/odds`, `/api/edges`, and
+  a bold-sportsbook board UI (live projections, Bovada auto-fill, manual odds
+  entry, live edge). Runs locally via `run_server.bat`. Does NOT yet have the
+  Streamlit app's Performance / Calibration / Bankroll / graphs — those stay in
+  Streamlit for now.
+- **Launchers (double-click, no terminal typing)** — `run_odds_test.bat`,
+  `run_backtest.bat`, `run_server.bat`, `push_to_github.bat`.
+- **Docs/config** — `REBUILD_PLAN.md` (component inventory + phased plan),
+  `requirements-api.txt`, `.gitignore` updated (cache + test outputs excluded).
+
+### Constraints hit this session
+- Build sandbox has no network to MLB/Bovada and an intermittent file-mount
+  truncation bug, so scraper/backtest/backend were verified by logic + real-dump
+  tests, not live end-to-end. Live runs happen on the user's machine.
+- Bovada rate-limits scrapers (booted the user's session mid-test). Frequent
+  polling would need a residential-proxy service (Bright Data / Scrapfly /
+  nimble) — deferred; not needed for once-a-day fills.
+
+### Next
+1. User runs `run_backtest.bat` → share summary → tune weights, decide whether to
+   wire Platt into live projections.
+2. Confirm the Streamlit Bovada button works locally (cloud IPs may be blocked
+   for Bovada — degrade to manual entry if so).
+3. Later: alt-line odds via proxy; port Performance / Calibration / Bankroll /
+   graphs into the new web board; deploy backend (Railway/Render).
+
+---
+
 ## Goal
 
 A Streamlit app (`app.py`) that projects MLB Total Bases (and H+R+RBI, pitcher

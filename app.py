@@ -950,6 +950,52 @@ with tab_bet:
             st.session_state.pop(_edkey, None)
         st.session_state["_odds_active"] = _odds_active
 
+        # --- Auto-fill odds from Bovada (Total Bases only) --------------------
+        if STAT == "TB":
+            _bc1, _bc2 = st.columns([1, 3])
+            with _bc1:
+                _fetch_bov = st.button("⚡ Auto-fill Bovada odds",
+                                       help="Pull today's Total Bases prices from Bovada and fill the table below.")
+            if _fetch_bov:
+                try:
+                    import odds_scrape as OS
+                    with st.spinner("Pulling Total Bases odds from Bovada…"):
+                        _props = OS.BovadaSource().fetch_tb_props(date.isoformat())
+                        _pairs = list(zip(df["Game"], df["Batter"]))
+                        _matched = OS.match_to_slate({"bovada": _props}, _pairs)
+                    _n = 0
+                    for (_g, _b), _row in _matched.items():
+                        _rec = _row.get("bovada", {})
+                        _entry = {}
+                        if _rec.get("line") is not None:
+                            try:
+                                _entry["line"] = float(_rec["line"])
+                            except (TypeError, ValueError):
+                                pass
+                        if _rec.get("over"):
+                            _entry["over"] = str(_rec["over"])
+                        if _rec.get("under"):
+                            _entry["under"] = str(_rec["under"])
+                        if _entry:
+                            odds_store[_okey(_g, _b)] = _entry
+                            _n += 1
+                    try:
+                        T.write_odds(odds_store)
+                    except Exception:
+                        pass
+                    st.session_state.pop(_basekey, None)   # force the editor to rebuild with fetched odds
+                    st.session_state["_bovada_msg"] = f"Filled {_n} batters from Bovada · {len(_props)} props found."
+                    st.rerun()
+                except Exception as _e:
+                    st.session_state["_bovada_msg"] = (f"Bovada fetch failed ({_e}). "
+                                                       "Cloud IPs are often blocked — try locally, or enter manually.")
+                    st.rerun()
+            if st.session_state.get("_bovada_msg"):
+                with _bc2:
+                    st.caption(st.session_state["_bovada_msg"])
+        else:
+            st.caption("Auto-fill from Bovada covers Total Bases. For this prop, enter odds manually or use Import below.")
+
         st.caption("Edit **Line** per player for alt lines (e.g. 0.5 / 2.5) — the cover probability and edges recompute at the line you set.")
         edited = st.data_editor(
             st.session_state[_basekey], key=_edkey,
