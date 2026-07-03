@@ -117,14 +117,16 @@ def build_picks(date_str, season):
 
     rows = []
     for mu in slate:
-        for b in mu.away_lineup:
-            row = project_batter(b, mu.home_pitcher, mu.venue, savant_bat, savant_pit, False, True)
-            if row:
-                rows.append({**row, "game": f"{mu.away} @ {mu.home}"})
-        for b in mu.home_lineup:
-            row = project_batter(b, mu.away_pitcher, mu.venue, savant_bat, savant_pit, True, False)
-            if row:
-                rows.append({**row, "game": f"{mu.away} @ {mu.home}"})
+        if mu.home_pitcher:
+            for b in mu.away_lineup:
+                row = project_batter(b, mu.home_pitcher, mu.venue, savant_bat, savant_pit, False, True)
+                if row:
+                    rows.append({**row, "game": f"{mu.away} @ {mu.home}"})
+        if mu.away_pitcher:
+            for b in mu.home_lineup:
+                row = project_batter(b, mu.away_pitcher, mu.venue, savant_bat, savant_pit, True, False)
+                if row:
+                    rows.append({**row, "game": f"{mu.away} @ {mu.home}"})
 
     picks = []
     for r in rows:

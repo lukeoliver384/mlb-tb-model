@@ -1,0 +1,5 @@
+# Backend API (separate from the Streamlit app's requirements.txt)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+requests>=2.31
+pandas>=2.1

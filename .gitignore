@@ -8,3 +8,10 @@ tracker_bets.csv
 tracker_odds.csv
 tracker.db
 .claude/settings.local.json
+
+# backend cache + local test outputs (not source code — don't upload)
+.cache/
+bovada_raw.json
+odds_output.txt
+backtest_output.txt
+backtest_results.csv

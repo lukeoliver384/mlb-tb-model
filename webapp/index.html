@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Prop Board</title>
+<style>
+:root{--bg:#0b0e14;--panel:#121722;--panel2:#161c28;--line:#232c3b;--txt:#eef2f8;--dim:#8a97ad;
+  --grn:#12d18e;--red:#ff5d6c;--gold:#ffcf4d;--accent:#2f6bff;}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--txt);font-variant-numeric:tabular-nums;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 18px 40px;}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;}
+.brand{display:flex;align-items:center;gap:10px;}
+.bolt{color:var(--grn);font-size:22px;}
+.name{font-weight:800;letter-spacing:1.5px;font-size:19px;}
+.tag{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--bg);background:var(--grn);padding:3px 8px;border-radius:5px;}
+.meta{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--dim);}
+.pill{background:var(--panel2);border:1px solid var(--line);padding:4px 10px;border-radius:20px;color:var(--txt);font-weight:600;}
+.live{display:flex;align-items:center;gap:6px;font-weight:700;font-size:11px;letter-spacing:.5px;}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--grn);animation:pl 1.6s infinite;}
+.live.off i{background:var(--dim);animation:none;}
+@keyframes pl{0%{box-shadow:0 0 0 0 rgba(18,209,142,.5)}70%{box-shadow:0 0 0 7px rgba(18,209,142,0)}100%{box-shadow:0 0 0 0 rgba(18,209,142,0)}}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;}
+.k-l{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;font-weight:600;}
+.k-v{font-size:26px;font-weight:800;margin:2px 0;letter-spacing:-.5px;}
+.k-v.pos{color:var(--grn);} .k-v.gold{color:var(--gold);}
+.k-s{font-size:11px;color:var(--dim);}
+.controls{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+.chip{background:var(--panel2);color:var(--dim);border:1px solid var(--line);padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:700;cursor:pointer;}
+.chip.on{background:var(--grn);color:var(--bg);border-color:var(--grn);}
+input.date{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12.5px;}
+.spacer{margin-left:auto;}
+.hint{font-size:11px;color:var(--dim);font-style:italic;}
+.tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
+table{width:100%;border-collapse:collapse;font-size:13.5px;}
+thead th{background:var(--panel2);color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;
+  font-weight:700;padding:10px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap;}
+thead th.l{text-align:left;} thead th.c{text-align:center;}
+tbody td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--line);}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover{background:var(--panel2);}
+td.l{text-align:left;}
+.bt{display:flex;flex-direction:column;align-items:flex-start;}
+.bt .nm{font-weight:700;font-size:14px;}
+.bt .vg{font-size:11px;color:var(--dim);}
+.mu{color:var(--dim);font-size:12px;text-align:left;}
+.big{font-weight:800;font-size:15px;}
+.book{font-size:9px;font-weight:800;background:var(--accent);color:#fff;padding:2px 5px;border-radius:4px;letter-spacing:.5px;margin-right:5px;}
+.book.manual{background:var(--gold);color:var(--bg);}
+.edge{font-weight:800;font-size:15px;}
+.edge.pos{color:var(--grn);} .edge.neg{color:var(--red);} .edge.flat{color:var(--dim);}
+.valtag{display:inline-block;font-size:9px;font-weight:800;color:var(--bg);background:var(--gold);padding:2px 6px;border-radius:4px;margin-left:6px;letter-spacing:.5px;vertical-align:middle;}
+.stars{color:var(--gold);letter-spacing:1px;font-size:12px;}
+.stars .off{color:var(--line);}
+input.odds{width:56px;background:#0e131c;color:var(--txt);border:1px solid var(--line);border-radius:6px;
+  padding:5px 6px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums;}
+input.odds:focus{outline:none;border-color:var(--grn);}
+input.odds.auto{color:var(--grn);border-color:transparent;background:transparent;font-weight:700;}
+.foot{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:11.5px;color:var(--dim);flex-wrap:wrap;gap:10px;}
+.msg{padding:14px;color:var(--dim);font-size:13px;text-align:center;}
+.banner{background:rgba(255,207,77,.12);border:1px solid rgba(255,207,77,.35);color:var(--gold);
+  border-radius:10px;padding:8px 12px;font-size:12px;margin-bottom:14px;display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><span class="bolt">◆</span><span class="name" id="brand">YOUR&nbsp;BRAND</span><span class="tag">TOTAL BASES</span></div>
+    <div class="meta">
+      <input class="date" type="date" id="date"/>
+      <span class="pill" id="ngames">— games</span>
+      <span class="live" id="live"><i></i><span id="liveTxt">CONNECTING</span></span>
+    </div>
+  </div>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="k-l">Top edge</div><div class="k-v pos" id="kTop">—</div><div class="k-s" id="kTopName">—</div></div>
+    <div class="kpi"><div class="k-l">+EV plays</div><div class="k-v" id="kEv">—</div><div class="k-s" id="kEvSub">priced</div></div>
+    <div class="kpi"><div class="k-l">Avg edge (value)</div><div class="k-v pos" id="kAvg">—</div><div class="k-s">vs de-vig fair</div></div>
+    <div class="kpi"><div class="k-l">Batters</div><div class="k-v" id="kN">—</div><div class="k-s" id="kNsub">on slate</div></div>
+  </div>
+
+  <div class="controls">
+    <button class="chip on" data-f="all">All</button>
+    <button class="chip" data-f="odds">Has odds</button>
+    <button class="chip" data-f="ev">+EV only</button>
+    <button class="chip" data-f="value">★ Value</button>
+    <span class="spacer"></span>
+    <span class="hint">green = auto (Bovada) · gold = your manual entry · edge updates as you type</span>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th class="l">Batter</th><th class="l">Matchup</th><th>Model<br>P(Over)</th>
+        <th>Line</th><th>Over</th><th>Under</th><th>Fair<br>P(Over)</th><th>Edge</th><th class="c">Conf</th>
+      </tr></thead>
+      <tbody id="body"><tr><td colspan="9" class="msg">Loading slate…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="foot">
+    <span id="footNote">Bovada auto-filled where posted · fill the rest by hand · your entries are highlighted gold</span>
+    <span id="stamp"></span>
+  </div>
+</div>
+
+<script>
+const API = location.origin.startsWith("http") ? location.origin : "http://127.0.0.1:8000";
+const VAL_EDGE = 0.02;                       // 2%+ edge = value
+let ROWS = [];                               // merged model + odds
+let FILTER = "all";
+const manual = {};                           // key -> {over, under}
+
+function key(g,b){return g+"||"+b;}
+function amerToProb(a){
+  if(a===null||a===undefined) return null;
+  a=String(a).trim().toUpperCase(); if(a==="") return null;
+  if(a==="EVEN"||a==="EV") a="100";
+  let n=parseFloat(a.replace("+","")); if(isNaN(n)||n===0) return null;
+  return n>0 ? 100/(n+100) : (-n)/((-n)+100);
+}
+function fairProb(over,under){
+  const po=amerToProb(over), pu=amerToProb(under);
+  if(po!==null&&pu!==null&&po+pu>0) return po/(po+pu);
+  if(po!==null) return po;                   // single-sided fallback (not de-vigged)
+  return null;
+}
+function stars(k){let s="";k=k||0;for(let i=0;i<5;i++)s+=i<k?"★":"<span class='off'>★</span>";return s;}
+function pct(x){return x===null?"—":(x*100).toFixed(1)+"%";}
+function edgeClass(e){return e===null?"flat":e>=0.01?"pos":e<=-0.01?"neg":"flat";}
+function edgeTxt(e){return e===null?"—":((e>0?"+":"")+(e*100).toFixed(1)+"%");}
+
+function rowEdge(r){
+  const m=manual[key(r.game,r.batter)]||{};
+  const over = m.over!==undefined ? m.over : r.over;
+  const under= m.under!==undefined ? m.under : r.under;
+  const fair = fairProb(over,under);
+  const edge = (fair!==null && r.p_over!==null) ? (r.p_over-fair) : null;
+  const isManual = (m.over!==undefined&&m.over!=="")||(m.under!==undefined&&m.under!=="");
+  return {over,under,fair,edge,isManual,hasAuto:(r.over!=null&&r.over!=="")};
+}
+
+function render(){
+  const body=document.getElementById("body");
+  let rs=ROWS.map(r=>({r,e:rowEdge(r)}));
+  if(FILTER==="odds") rs=rs.filter(x=>x.e.fair!==null);
+  if(FILTER==="ev")   rs=rs.filter(x=>x.e.edge!==null&&x.e.edge>=0.01);
+  if(FILTER==="value")rs=rs.filter(x=>x.e.edge!==null&&x.e.edge>=VAL_EDGE);
+  rs.sort((a,b)=>((b.e.edge??-9)-(a.e.edge??-9)));
+  if(!rs.length){body.innerHTML='<tr><td colspan="9" class="msg">No rows match this filter.</td></tr>';updateKpis();return;}
+  body.innerHTML=rs.map(({r,e})=>{
+    const k=key(r.game,r.batter);
+    const val = e.edge!==null&&e.edge>=VAL_EDGE;
+    const bookBadge = e.isManual?'<span class="book manual">YOU</span>':(e.hasAuto?'<span class="book">BOV</span>':'');
+    const ov = (manual[k]&&manual[k].over!==undefined)?manual[k].over:(r.over??"");
+    const un = (manual[k]&&manual[k].under!==undefined)?manual[k].under:(r.under??"");
+    const autoCls = e.hasAuto&&!e.isManual?"auto":"";
+    return `<tr>
+      <td class="l"><div class="bt"><span class="nm">${r.batter}${val?'<span class=valtag>VALUE</span>':''}</span><span class="vg">${r.vg||''}</span></div></td>
+      <td class="mu">${r.game}</td>
+      <td class="big">${pct(r.p_over)}</td>
+      <td>${r.line??"1.5"}</td>
+      <td><span>${bookBadge}</span><input class="odds ${autoCls}" data-k="${k}" data-s="over" value="${ov}" placeholder="+/-"/></td>
+      <td><input class="odds" data-k="${k}" data-s="under" value="${un}" placeholder="+/-"/></td>
+      <td>${pct(e.fair)}</td>
+      <td class="edge ${edgeClass(e.edge)}">${edgeTxt(e.edge)}</td>
+      <td class="c"><span class="stars">${stars(r.conf)}</span></td>
+    </tr>`;}).join("");
+  body.querySelectorAll("input.odds").forEach(inp=>{
+    inp.addEventListener("input",ev=>{
+      const k=ev.target.dataset.k,s=ev.target.dataset.s;
+      manual[k]=manual[k]||{}; manual[k][s]=ev.target.value.trim();
+      // live-update just this row's fair/edge without full re-render (keep focus)
+      const tr=ev.target.closest("tr");
+      const r=ROWS.find(x=>key(x.game,x.batter)===k); const e=rowEdge(r);
+      tr.children[6].textContent=pct(e.fair);
+      const ec=tr.children[7]; ec.textContent=edgeTxt(e.edge); ec.className="edge "+edgeClass(e.edge);
+    });
+  });
+  updateKpis();
+}
+
+function updateKpis(){
+  const es=ROWS.map(r=>rowEdge(r)).filter(e=>e.edge!==null);
+  const priced=es.length, ev=es.filter(e=>e.edge>=0.01);
+  document.getElementById("kEv").textContent=ev.length;
+  document.getElementById("kEvSub").textContent="of "+priced+" priced";
+  document.getElementById("kN").textContent=ROWS.length;
+  const vals=ev.map(e=>e.edge);
+  document.getElementById("kAvg").textContent=vals.length?("+"+(vals.reduce((a,b)=>a+b,0)/vals.length*100).toFixed(1)+"%"):"—";
+  let top=null,topR=null;
+  ROWS.forEach(r=>{const e=rowEdge(r);if(e.edge!==null&&(top===null||e.edge>top)){top=e.edge;topR=r;}});
+  document.getElementById("kTop").textContent=top!==null?("+"+(top*100).toFixed(1)+"%"):"—";
+  document.getElementById("kTopName").textContent=topR?topR.batter:"—";
+}
+
+async function load(){
+  const date=document.getElementById("date").value;
+  const live=document.getElementById("live"),liveTxt=document.getElementById("liveTxt");
+  try{
+    const [sl,od]=await Promise.all([
+      fetch(`${API}/api/slate?date=${date}`).then(r=>r.json()),
+      fetch(`${API}/api/odds?date=${date}&books=bovada`).then(r=>r.json()).catch(()=>({board:[]}))
+    ]);
+    const omap={};(od.board||[]).forEach(o=>{omap[key(o.game,o.batter)]=o;});
+    ROWS=(sl.rows||[]).map(r=>{
+      const o=omap[key(r.game,r.batter)];
+      const bov=o&&o.books&&o.books.bovada?o.books.bovada:{};
+      return {batter:r.batter,game:r.game,pitcher:r.pitcher,conf:r.conf,
+        p_over:r.p_over!=null?r.p_over:null,
+        vg:(r.expected?"proj. lineup · ":"")+"vs "+(r.pitcher||""),
+        line:bov.line??"1.5",over:bov.over??"",under:bov.under??""};
+    });
+    document.getElementById("ngames").textContent=(sl.n_games??"—")+" games";
+    live.classList.remove("off");liveTxt.textContent=sl.cached?"CACHED":"LIVE";
+    document.getElementById("stamp").textContent="loaded "+new Date().toLocaleTimeString();
+    render();
+  }catch(err){
+    live.classList.add("off");liveTxt.textContent="OFFLINE";
+    document.getElementById("banner").style.display="block";
+    document.getElementById("banner").textContent="Can't reach the backend. Start it with run_server.bat, then reload. Showing demo data.";
+    demo();
+  }
+}
+function demo(){
+  ROWS=[
+   {batter:"Elly De La Cruz",game:"CIN @ BAL",conf:5,p_over:0.55,vg:"S · vs LHP",line:"1.5",over:"-105",under:"-125"},
+   {batter:"Gunnar Henderson",game:"CIN @ BAL",conf:5,p_over:0.57,vg:"L · vs RHP",line:"1.5",over:"-120",under:"-110"},
+   {batter:"Cody Bellinger",game:"NYY @ MIN",conf:4,p_over:0.50,vg:"L · vs RHP",line:"1.5",over:"+100",under:"-130"},
+   {batter:"Juan Soto",game:"NYM @ ATL",conf:4,p_over:0.53,vg:"L · vs RHP",line:"1.5",over:"",under:""},
+   {batter:"Paul Goldschmidt",game:"NYY @ MIN",conf:2,p_over:0.41,vg:"R · vs RHP",line:"1.5",over:"+115",under:"-150"},
+  ];
+  render();
+}
+document.querySelectorAll(".chip").forEach(c=>c.addEventListener("click",()=>{
+  document.querySelectorAll(".chip").forEach(z=>z.classList.remove("on"));c.classList.add("on");FILTER=c.dataset.f;render();
+}));
+document.getElementById("date").addEventListener("change",load);
+(function(){const d=new Date();document.getElementById("date").value=d.toISOString().slice(0,10);load();})();
+</script>
+</body>
+</html>
