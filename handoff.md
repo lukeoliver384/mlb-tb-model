@@ -51,13 +51,31 @@ new web app gets its own host later; no split needed.
   polling would need a residential-proxy service (Bright Data / Scrapfly /
   nimble) — deferred; not needed for once-a-day fills.
 
+### Open items at session close
+- **Verify before push:** run `check_app.bat` to confirm `app.py` (with the new
+  Bovada button) compiles cleanly. The build sandbox couldn't compile-check it
+  (mount truncation), so this hasn't been confirmed on a full copy yet.
+- **Autograding — NOT yet built.** Plan: add a guarded `T.grade()` call that runs
+  once when the Streamlit app loads (grades yesterday hands-free, writes to the
+  Google Sheet since it's inside Streamlit where creds live). Deferred until the
+  Bovada edit is confirmed clean, to avoid stacking unverified edits. Fully
+  hands-free CI version would need `_gsheet()` refactored to read the service
+  account from an env var + a GitHub secret — bigger, later.
+- **Discord daily ping — broken, root cause found.** The Discord webhook was
+  deleted; the `DISCORD_WEBHOOK_URL` secret still holds the dead URL, so every
+  Action run errors on POST. Fix (user, when wanted): create a new Discord webhook,
+  overwrite the secret value, re-run the workflow. No code change needed.
+
 ### Next
-1. User runs `run_backtest.bat` → share summary → tune weights, decide whether to
-   wire Platt into live projections.
-2. Confirm the Streamlit Bovada button works locally (cloud IPs may be blocked
-   for Bovada — degrade to manual entry if so).
-3. Later: alt-line odds via proxy; port Performance / Calibration / Bankroll /
-   graphs into the new web board; deploy backend (Railway/Render).
+1. Run `check_app.bat`; if clean, `push_to_github.bat`. Then add the auto-grade
+   on-load hook.
+2. Run `run_backtest.bat` → share summary → tune weights, decide whether to wire
+   Platt into live projections.
+3. Confirm the Streamlit Bovada button works locally (cloud IPs may block Bovada —
+   degrade to manual entry if so; a residential-proxy service fixes cloud use).
+4. Later: alt-line odds via proxy; port Performance / Calibration / Bankroll /
+   graphs into the new web board; deploy backend (Railway/Render); recreate the
+   Discord webhook to restore the daily ping.
 
 ---
 
