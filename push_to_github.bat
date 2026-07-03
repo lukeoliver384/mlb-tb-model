@@ -22,15 +22,31 @@ git status --short
 echo.
 
 git commit -m "Add backtest, odds scraper, FastAPI backend, and web board UI"
-if errorlevel 1 echo (Nothing new to commit -- everything is already backed up.)
+if errorlevel 1 echo (Nothing new to commit -- your latest edits are already saved locally.)
+echo.
+
+echo Syncing with GitHub (pulling any remote changes first)...
+git pull --no-rebase --no-edit
+if errorlevel 1 (
+  echo.
+  echo *** Couldn't auto-merge -- there may be a conflict. ***
+  echo Don't worry, nothing is lost. Send Claude this window's text and he'll fix it.
+  echo.
+  pause
+  exit /b
+)
 echo.
 
 echo Pushing to GitHub...
 git push
-echo.
-
-echo ------------------------------------------------------------
-echo  DONE. Check your repo at:
-echo    https://github.com/lukeoliver384/mlb-tb-model
-echo ------------------------------------------------------------
+if errorlevel 1 (
+  echo.
+  echo *** Push still failed. Copy this window's text to Claude. ***
+) else (
+  echo.
+  echo ------------------------------------------------------------
+  echo  DONE. Your work is backed up at:
+  echo    https://github.com/lukeoliver384/mlb-tb-model
+  echo ------------------------------------------------------------
+)
 pause
