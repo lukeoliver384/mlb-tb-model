@@ -21,10 +21,36 @@ from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 STATSAPI = "https://statsapi.mlb.com/api/v1"
 TIMEOUT = 15
 HEADERS = {"User-Agent": "mlb-tb-model/1.0"}
+
+# A full slate is hundreds of API calls fired across ~24 worker threads. Using a
+# bare `requests.get` opens (and tears down) a fresh TCP+TLS connection every
+# single time, so the threads spend most of their wall-clock time on handshakes
+# instead of data — a full load measured ~140s that way. A shared Session with a
+# keep-alive connection pool sized to the worker count lets threads reuse warm
+# connections, and a small retry/backoff smooths over the transient 429s that
+# used to silently zero out a batter's stats (and drop them from the board).
+def _make_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    retry = Retry(
+        total=3, connect=3, read=3,
+        backoff_factor=0.4,                  # 0.4s, 0.8s, 1.6s between tries
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=retry)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
+
+_SESSION = _make_session()
 
 
 # --------------------------------------------------------------------------- #
@@ -259,7 +285,7 @@ class Matchup:
 # Schedule + lineups (MLB StatsAPI)                                           #
 # --------------------------------------------------------------------------- #
 def _get(url, **params):
-    r = requests.get(url, params=params, headers=HEADERS, timeout=TIMEOUT)
+    r = _SESSION.get(url, params=params, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 
@@ -409,7 +435,7 @@ def espn_mlb_games(date: str) -> dict:
     try:
         d = date.replace("-", "")
         url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates={d}"
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r = _SESSION.get(url, timeout=TIMEOUT)
         r.raise_for_status()
         for ev in r.json().get("events", []):
             comp = (ev.get("competitions") or [{}])[0]
@@ -453,7 +479,7 @@ def espn_mlb_headlines(limit: int = 10) -> list:
     """Recent MLB news headlines from ESPN. Empty on failure."""
     try:
         url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/news"
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r = _SESSION.get(url, timeout=TIMEOUT)
         r.raise_for_status()
         out = []
         for a in r.json().get("articles", [])[:limit]:
@@ -698,7 +724,7 @@ def load_savant_expected(season: int, kind: str = "batter") -> dict:
            f"?type={kind}&year={season}&position=&team=&min=q&csv=true")
     out = {}
     try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r = _SESSION.get(url, timeout=TIMEOUT)
         r.raise_for_status()
         import io, csv
         reader = csv.DictReader(io.StringIO(r.text))
@@ -724,7 +750,7 @@ def load_pitcher_whiff(season: int) -> dict:
            f"?type=pitcher&year={season}&min=50&csv=true")
     out = {}
     try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r = _SESSION.get(url, timeout=TIMEOUT)
         r.raise_for_status()
         import io, csv
         reader = csv.DictReader(io.StringIO(r.text))
@@ -761,7 +787,7 @@ def load_savant_arsenal(season: int, kind: str = "batter") -> dict:
            f"?type={kind}&year={season}&min=50&csv=true")
     out = {}
     try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r = _SESSION.get(url, timeout=TIMEOUT)
         r.raise_for_status()
         import io, csv
         reader = csv.DictReader(io.StringIO(r.text))
