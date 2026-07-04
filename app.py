@@ -1248,6 +1248,10 @@ with tab_bet:
             rdf = rdf.sort_values("Model EV", ascending=False)
             _cmap = {(r["Game"], r["Batter"]): r.get("Conf", 3) for _, r in df.iterrows()}
             rdf["Conf"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
+            # Which calibration bucket this pick sits in — same bin edges as the
+            # "Confidence vs actual hit rate" table, from the leaned-side confidence.
+            rdf.insert(rdf.columns.get_loc("Model P") + 1, "Band",
+                       rdf["Model P"].apply(T.confidence_band))
 
             _value_picks = rdf[rdf["Verdict"] == "VALUE"]
             if len(_value_picks) >= 2:
@@ -1266,7 +1270,7 @@ with tab_bet:
             if not _val.empty:
                 st.subheader("Top 5 value plays")
                 st.caption("Ranked by expected ROI at your price (not hit rate) — plus-money value floats up.")
-                _vshow = _val[["Batter", "Side", "Line", "Odds", "Model P", "Model EV", "Edge", "Stake $", "Conf"]].copy()
+                _vshow = _val[["Batter", "Side", "Line", "Odds", "Model P", "Band", "Model EV", "Edge", "Stake $", "Conf"]].copy()
                 _vshow["Edge"] = _vshow["Edge"] * 100      # fraction -> percentage points
                 _vshow["Model EV"] = _vshow["Model EV"] * 100
                 _vshow["Model P"] = _vshow["Model P"] * 100

@@ -432,6 +432,30 @@ def calibration_by_probability(log: pd.DataFrame, temp: float = 1.0) -> pd.DataF
     return out
 
 
+# Shared confidence-bucket definition. The projections board, the edges table,
+# and the calibration report all key off these SAME edges so a pick and its
+# calibration bucket can never disagree. Buckets are on the leaned-side
+# confidence, max(p, 1-p), and are left-inclusive: 0.50<=x<0.55, ... 0.70<=x.
+CONF_BINS = [0.5, 0.55, 0.60, 0.65, 0.70, 1.01]
+CONF_LABELS = ["50-55%", "55-60%", "60-65%", "65-70%", "70%+"]
+
+
+def confidence_band(p) -> str:
+    """Bucket label for a pick's model probability, using the leaned-side
+    confidence max(p, 1-p). Returns '' if p isn't a usable number."""
+    try:
+        p = float(p)
+    except (TypeError, ValueError):
+        return ""
+    if pd.isna(p):
+        return ""
+    conf = max(p, 1 - p)
+    for lo, hi, label in zip(CONF_BINS[:-1], CONF_BINS[1:], CONF_LABELS):
+        if lo <= conf < hi:
+            return label
+    return CONF_LABELS[-1] if conf >= CONF_BINS[-2] else ""
+
+
 def calibration_by_confidence(log: pd.DataFrame) -> pd.DataFrame:
     """Bucket graded picks by the model's confidence on its leaned side, and show
     the actual hit rate of that side. Tells you whether a '60%' really hits ~60%."""
@@ -445,9 +469,7 @@ def calibration_by_confidence(log: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     g["conf"] = g["p"].apply(lambda p: max(p, 1 - p))           # confidence on leaned side
     g["hit"] = (g["p"] >= 0.5) == (g["oh"] > 0.5)               # did the leaned side win
-    bins = [0.5, 0.55, 0.60, 0.65, 0.70, 1.01]
-    labels = ["50-55%", "55-60%", "60-65%", "65-70%", "70%+"]
-    g["bucket"] = pd.cut(g["conf"], bins=bins, labels=labels, right=False)
+    g["bucket"] = pd.cut(g["conf"], bins=CONF_BINS, labels=CONF_LABELS, right=False)
     out = g.groupby("bucket", observed=True).agg(
         n=("hit", "size"),
         confidence=("conf", "mean"),
