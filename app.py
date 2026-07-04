@@ -361,6 +361,48 @@ def _log_cached():
 def _invalidate_tracker_cache():
     st.session_state.pop("bets_cache", None)
     st.session_state.pop("log_cache", None)
+    # The read-only analytics below are memoized on the log/bets content, so a
+    # fresh log/grade must also clear their cached results.
+    for _fn in (_c_metrics, _c_pred_breakdown, _c_calib_conf, _c_calib_prob,
+                _c_calib_prob_platt, _c_bankroll_curve, _c_clv_metrics):
+        try:
+            _fn.clear()
+        except Exception:
+            pass
+
+# Streamlit re-executes the whole script — every tab body included — on each
+# rerun, so while you type odds on the Projections tab the Performance / CLV /
+# Calibration analytics were recomputing on every keystroke (three times over,
+# once per prop sub-tab). These are pure functions of the graded log / bets, so
+# memoizing them on that content makes repeated reruns instant; they only
+# recompute when the log actually changes (see _invalidate_tracker_cache).
+@st.cache_data(show_spinner=False)
+def _c_metrics(plog):
+    return T.metrics(plog)
+
+@st.cache_data(show_spinner=False)
+def _c_pred_breakdown(plog):
+    return T.prediction_breakdown(plog)
+
+@st.cache_data(show_spinner=False)
+def _c_calib_conf(plog):
+    return T.calibration_by_confidence(plog)
+
+@st.cache_data(show_spinner=False)
+def _c_calib_prob(plog, temp):
+    return T.calibration_by_probability(plog, temp=temp)
+
+@st.cache_data(show_spinner=False)
+def _c_calib_prob_platt(plog, a, b):
+    return T.calibration_by_probability_platt(plog, a, b)
+
+@st.cache_data(show_spinner=False)
+def _c_bankroll_curve(bets, start):
+    return T.bankroll_curve(bets, start)
+
+@st.cache_data(show_spinner=False)
+def _c_clv_metrics(cb):
+    return T.clv_metrics(cb)
 
 colA, colB = st.columns([1, 5])
 with colA:
@@ -1400,7 +1442,7 @@ with tab_perf:
                            f"graded {_ng} projections and {_nb} bets.")
 
     def _prop_view(plog, pbets, label, prop_temp=1.0):
-        _m = T.metrics(plog)
+        _m = _c_metrics(plog)
         if _m:
             g1, g2, g3, g4 = st.columns(4)
             g1.metric("Graded", _m["n"])
@@ -1410,14 +1452,14 @@ with tab_perf:
             g4.metric("Prediction accuracy",
                       f"{_m['pred_acc']*100:.0f}%" if _m.get("pred_acc") is not None else "—",
                       help="How often the projection's over/under call (proj vs the line) matched the actual result.")
-            pb = T.prediction_breakdown(plog)
+            pb = _c_pred_breakdown(plog)
             if not pb.empty:
                 st.caption("Prediction accuracy — projection's over/under call vs actual")
                 st.dataframe(pb, use_container_width=True, hide_index=True,
                              column_config={
                                  "Prediction": "Model called",
                                  "Correct": st.column_config.NumberColumn("Correct", format="%d%%")})
-            cc = T.calibration_by_confidence(plog)
+            cc = _c_calib_conf(plog)
             if not cc.empty:
                 with st.expander("Confidence vs actual hit rate"):
                     ccd = cc.copy()
@@ -1431,7 +1473,7 @@ with tab_perf:
                                      "confidence": st.column_config.NumberColumn("Avg conf", format="%d%%"),
                                      "hit_rate": st.column_config.NumberColumn("Actual hit", format="%d%%"),
                                      "gap": st.column_config.NumberColumn("Gap", format="%+d pts")})
-            cp = T.calibration_by_probability(plog, temp=float(prop_temp))
+            cp = _c_calib_prob(plog, float(prop_temp))
             if not cp.empty:
                 with st.expander("Calibration by model probability — P(over)"):
                     st.caption(f"Does a P(over) of X% actually go over ~X%? 'Calibrated' applies your "
@@ -1487,7 +1529,7 @@ with tab_perf:
             T.set_setting("perf_start", float(_perf_start))
         except Exception:
             pass
-    _allcurve = T.bankroll_curve(_bets, _perf_start)
+    _allcurve = _c_bankroll_curve(_bets, _perf_start)
     if not _allcurve.empty:
         st.subheader("Bankroll — combined (all props)")
         st.caption("Built from your fixed starting bankroll through logged bets. Peak and drawdown are historical.")
@@ -1556,7 +1598,7 @@ with tab_calib:
                     "each bucket, how often did they actually hit vs. what the raw model said vs. what the "
                     "Platt-fitted curve says?")
         try:
-            _rel = T.calibration_by_probability_platt(_calib_log, _pf["A"], _pf["B"])
+            _rel = _c_calib_prob_platt(_calib_log, _pf["A"], _pf["B"])
         except Exception:
             _rel = None
         if _rel is not None and not _rel.empty:
@@ -1718,7 +1760,7 @@ with tab_clv:
                 st.rerun()
             except Exception as ex:
                 st.warning(f"Save failed: {ex}")
-        _cm = T.clv_metrics(_cb)
+        _cm = _c_clv_metrics(_cb)
         if _cm and _cm["n"]:
             cl1, cl2, cl3 = st.columns(3)
             cl1.metric("Bets with close", _cm["n"])
