@@ -195,8 +195,8 @@ _seed("ui_kwhiff", True); _seed("ui_wkwhiff", 0.5)
 
 with st.sidebar:
     st.header("Slate")
-    date = st.date_input("Date", dt.date.today())
-    season = st.number_input("Stats season", 2015, 2030, dt.date.today().year)
+    date = st.date_input("Date", D.today_local())
+    season = st.number_input("Stats season", 2015, 2030, D.today_local().year)
     prop = st.radio("Prop", ["Total Bases", "Hits + Runs + RBIs", "Pitcher Strikeouts"], key="ui_prop",
                     help="Pitcher Ks: projected from each batter in the day's lineup (vs-hand K%), PA-weighted.")
     STAT = "TB" if prop.startswith("Total") else ("HRR" if prop.startswith("Hits") else "K")
@@ -419,7 +419,7 @@ if go:
         st.session_state["savant"] = load_savant(int(season)) if use_statcast else ({}, {})
         st.session_state["arsenal"] = load_arsenal(int(season)) if use_arsenal else ({}, {})
         st.session_state["whiff"] = load_whiff(int(season)) if use_kwhiff else {}
-        st.session_state["slate_loaded_at"] = dt.datetime.now().strftime("%I:%M %p").lstrip("0")
+        st.session_state["slate_loaded_at"] = D.now_local().strftime("%I:%M %p").lstrip("0") + " CT"
         st.session_state["_just_loaded"] = True
         st.rerun()
     except Exception as ex:

@@ -224,7 +224,7 @@ def grade_diagnostic(season: int) -> dict:
     log = read_log()
     if log is None or log.empty:
         return {"(log empty)": 0}
-    today = dt.date.today().isoformat()
+    today = D.today_local().isoformat()
     c = Counter()
     cp = Counter()
     finals = {}
@@ -311,7 +311,7 @@ def grade(season: int, void_days: int = 2) -> int:
     if log.empty:
         return 0
     log = log.astype(object)
-    today = dt.date.today().isoformat()
+    today = D.today_local().isoformat()
     today_d = dt.date.fromisoformat(today)
     finals = {}
     n = 0
@@ -652,7 +652,7 @@ def grade_bets(season: int) -> int:
     if bets.empty:
         return 0
     bets = bets.astype(object)
-    today = dt.date.today().isoformat()
+    today = D.today_local().isoformat()
     finals = {}
     n = 0
     for i, row in bets.iterrows():

@@ -146,7 +146,7 @@ def _rows_to_matrix(records, cols):
 def grade_log(sh, season: int, void_days: int) -> dict:
     ws = sh.sheet1
     records = ws.get_all_records(expected_headers=LOG_COLUMNS)
-    today = dt.date.today().isoformat()
+    today = D.today_local().isoformat()
     today_d = dt.date.fromisoformat(today)
     finals: dict = {}
     graded = voided = dropped = 0
@@ -215,7 +215,7 @@ def grade_bets(sh, season: int) -> dict:
     except Exception:
         return {"graded": 0, "voided": 0, "rows": 0, "missing": True}
     records = ws.get_all_records(expected_headers=BET_COLUMNS)
-    today = dt.date.today().isoformat()
+    today = D.today_local().isoformat()
     finals: dict = {}
     graded = voided = 0
     kept = []
@@ -277,12 +277,12 @@ def _post_discord(msg: str) -> None:
 
 
 def main():
-    season = int(os.environ.get("GRADE_SEASON") or dt.date.today().year)
+    season = int(os.environ.get("GRADE_SEASON") or D.today_local().year)
     void_days = int(os.environ.get("GRADE_VOID_DAYS") or "2")
     sh = _open_sheet()
     lg = grade_log(sh, season, void_days)
     bt = grade_bets(sh, season)
-    summary = (f"Tracker grading {dt.date.today().isoformat()} — "
+    summary = (f"Tracker grading {D.today_local().isoformat()} — "
                f"log: {lg['graded']} graded, {lg['voided']} voided"
                + (f", {lg['dropped']} corrupt dropped" if lg.get("dropped") else "")
                + f"; bets: {bt['graded']} graded, {bt['voided']} voided"

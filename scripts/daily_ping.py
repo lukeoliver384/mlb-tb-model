@@ -179,8 +179,8 @@ def send_discord(webhook_url, content):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--date", default=dt.date.today().isoformat())
-    parser.add_argument("--season", type=int, default=dt.date.today().year)
+    parser.add_argument("--date", default=D.today_local().isoformat())
+    parser.add_argument("--season", type=int, default=D.today_local().year)
     parser.add_argument("--dry-run", action="store_true", help="Print instead of posting to Discord")
     args = parser.parse_args()
 

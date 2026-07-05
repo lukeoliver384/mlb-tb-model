@@ -2,14 +2,12 @@ name: Daily slate ping
 
 on:
   schedule:
-    # Times below are ET (EDT, UTC-4, in effect through early Nov). GitHub
-    # cron is UTC-only — no DST awareness — so each offset shifts by an hour
-    # once EST (UTC-5) kicks back in; adjust then if it matters to you.
-    # Runs are also best-effort timed and can land a few minutes late during
-    # GitHub's peak load.
-    - cron: "30 13 * * *"   # 9:30 AM ET
-    - cron: "0 16 * * *"    # 12:00 PM ET
-    - cron: "0 20 * * *"    # 4:00 PM ET
+    # Times are US Central via UTC (GitHub cron has no DST). Values below are CDT
+    # (UTC-5, Mar-Nov baseball season); once CST (UTC-6) returns in Nov each shifts
+    # an hour earlier in Central. Best-effort timing; can land a few minutes late.
+    - cron: "0 14 * * *"    # 9:00 AM CT
+    - cron: "0 17 * * *"    # 12:00 PM CT
+    - cron: "0 21 * * *"    # 4:00 PM CT
   workflow_dispatch: {}
 
 jobs:
@@ -22,7 +20,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests
+      - run: pip install requests tzdata
 
       - run: python scripts/daily_ping.py
         env:

@@ -2,11 +2,11 @@ name: Nightly tracker grading
 
 on:
   schedule:
-    # 13:00 UTC = 9:00 AM ET (EDT). Runs after the prior day's games — including
-    # late West-coast finishes — have settled in the MLB API. GitHub cron is
-    # UTC-only (no DST), so this shifts to 8:00 AM ET once EST returns; adjust if
-    # it matters. Best-effort timing; may land a few minutes late.
-    - cron: "0 13 * * *"
+    # 7:00 AM US Central. Runs after the prior day's games — including late
+    # West-coast finishes — have settled in the MLB API. GitHub cron is UTC-only
+    # (no DST): 12:00 UTC = 7 AM CDT (Mar-Nov, baseball season). Once CST returns
+    # in Nov it becomes 6 AM CT; harmless for grading. Best-effort timing.
+    - cron: "0 12 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests gspread google-auth
+      - run: pip install requests gspread google-auth tzdata
 
       - run: python scripts/daily_grade.py
         env:

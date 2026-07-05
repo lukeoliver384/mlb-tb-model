@@ -2,17 +2,18 @@ name: Auto-log slate projections
 
 on:
   schedule:
-    # Runs hourly across the window when lineups post and games start, so each
-    # game is logged shortly after its official lineup drops and BEFORE first
-    # pitch (the script gates on abstractGameState == "Preview" and confirmed
-    # lineups, and is idempotent, so overlapping/repeat runs never double-log).
-    # UTC (GitHub cron has no DST): 15:00-02:00 UTC ≈ 11:00 AM - 10:00 PM ET (EDT).
-    - cron: "0 15-23 * * *"
+    # Hourly across the window when lineups post and games start, so each game is
+    # logged shortly after its official lineup drops and BEFORE first pitch (the
+    # script gates on abstractGameState == "Preview" + confirmed lineups and is
+    # idempotent, so overlapping runs never double-log). Times are US Central via
+    # UTC (GitHub cron has no DST): 14:00-02:00 UTC = 9:00 AM - 9:00 PM CDT
+    # (baseball season). In Nov (CST) it shifts to 8 AM - 8 PM CT.
+    - cron: "0 14-23 * * *"
     - cron: "0 0-2 * * *"
   workflow_dispatch:
     inputs:
       date:
-        description: "Slate date YYYY-MM-DD (default: today UTC)"
+        description: "Slate date YYYY-MM-DD (default: today, US Central)"
         required: false
 
 jobs:
@@ -25,7 +26,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests gspread google-auth
+      - run: pip install requests gspread google-auth tzdata
 
       - run: python scripts/daily_log.py ${{ github.event.inputs.date && format('--date {0}', github.event.inputs.date) || '' }}
         env:

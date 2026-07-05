@@ -28,6 +28,27 @@ STATSAPI = "https://statsapi.mlb.com/api/v1"
 TIMEOUT = 15
 HEADERS = {"User-Agent": "mlb-tb-model/1.0"}
 
+# Local wall-clock timezone for "today"/"now". Streamlit Cloud AND GitHub Actions
+# both run in UTC, so dt.date.today() there rolls over to tomorrow in the evening
+# US Central time — which made the app default to the wrong slate date, show the
+# load time in UTC, and (on late auto-log runs) log the next day's slate. Anchor
+# every "today"/"now" in the model to US Central instead.
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo("America/Chicago")
+except Exception:   # e.g. Windows without tzdata — MLB season is mostly CDT (UTC-5)
+    LOCAL_TZ = dt.timezone(dt.timedelta(hours=-5))
+
+
+def today_local() -> dt.date:
+    """Current date in US Central (auto CST/CDT), not the server's UTC date."""
+    return dt.datetime.now(LOCAL_TZ).date()
+
+
+def now_local() -> dt.datetime:
+    """Current wall-clock time in US Central."""
+    return dt.datetime.now(LOCAL_TZ)
+
 # A full slate is hundreds of API calls fired across ~24 worker threads. Using a
 # bare `requests.get` opens (and tears down) a fresh TCP+TLS connection every
 # single time, so the threads spend most of their wall-clock time on handshakes
@@ -317,7 +338,7 @@ def _last_lineup_for_team(team_id: int):
     """(battingOrder, players) from the team's most recent FINAL game — used as a PROJECTED
     lineup before today's is posted. (None, None) if unavailable."""
     try:
-        today = dt.date.today()
+        today = today_local()
         sched = _get(f"{STATSAPI}/schedule", sportId=1, teamId=team_id,
                      startDate=(today - dt.timedelta(days=12)).isoformat(),
                      endDate=(today - dt.timedelta(days=1)).isoformat())
@@ -696,7 +717,7 @@ def player_hrr_on_date(pid: int, season: int, date: str):
 
 def fill_recent_form(b: Batter, season: int, days: int = 21) -> Batter:
     """Last-N-days TB/PA via byDateRange. Stored on b.recent_pa / b.recent_tb."""
-    end = dt.date.today()
+    end = today_local()
     start = end - dt.timedelta(days=days)
     try:
         data = _get(f"{STATSAPI}/people/{b.mlbam_id}/stats",
