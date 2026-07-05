@@ -15,3 +15,5 @@ bovada_raw.json
 odds_output.txt
 backtest_output.txt
 backtest_results.csv
+optimizer_report.md
+optimizer_best.json
