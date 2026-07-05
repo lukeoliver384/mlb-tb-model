@@ -408,13 +408,15 @@ def _c_clv_metrics(cb):
 @st.cache_data(show_spinner=False)
 def _c_band_anchors(plog, prop):
     """Continuous stake multipliers by confidence band, learned from realized EV
-    on the graded log for this prop. Memoized on the log content so the odds read
-    + groupby don't rerun on every keystroke. Empty -> live sizing is flat Kelly."""
+    on the graded log for this prop. Uses ONLY legs with a real entered price
+    (real_only) so a -110 fallback never biases the realized EV — bands stay near
+    a neutral 1.0 until enough legs are actually priced. Memoized on the log
+    content so the odds read + groupby don't rerun on every keystroke."""
     try:
         _lu = {}
         for (_d, _pr, _gm, _bt), _rec in T.read_odds().items():
             _lu[(T._iso(_d), str(_pr).upper(), str(_bt).strip())] = _rec
-        return T.band_stake_multipliers(plog, prop=prop, odds_lookup=_lu)
+        return T.band_stake_multipliers(plog, prop=prop, odds_lookup=_lu, real_only=True)
     except Exception:
         return []
 

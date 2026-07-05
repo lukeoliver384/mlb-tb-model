@@ -556,8 +556,8 @@ def ev_by_confidence(log: pd.DataFrame, odds_lookup: dict | None = None,
         realized = (dec - 1.0) if win else -1.0
         model_ev = conf * (dec - 1.0) - (1 - conf)
         rows.append({"band": band, "conf": conf, "hit": int(win),
-                     "dec": dec, "realized": realized, "model_ev": model_ev,
-                     "used_real": int(used_real)})
+                     "dec": dec, "imp": 1.0 / dec, "realized": realized,
+                     "model_ev": model_ev, "used_real": int(used_real)})
     if not rows:
         return pd.DataFrame()
     gr = pd.DataFrame(rows)
@@ -567,15 +567,19 @@ def ev_by_confidence(log: pd.DataFrame, odds_lookup: dict | None = None,
         n_real=("used_real", "sum"),
         avg_conf=("conf", "mean"),
         hit_rate=("hit", "mean"),
-        avg_dec=("dec", "mean"),
+        avg_imp=("imp", "mean"),
         realized_ev=("realized", "mean"),
         model_ev=("model_ev", "mean")).reset_index()
-    # average decimal price back to an American number for display
+    # Representative American price for the band. Average in IMPLIED-PROBABILITY
+    # space (the mean break-even line), not decimal space: averaging decimals
+    # skews the number toward plus-money (e.g. -200 & +200 -> +125 in decimal
+    # space but +100 in implied-prob space).
     def _dec_to_american(d):
         if not d or d <= 1:
             return None
         return round((d - 1) * 100) if d >= 2 else round(-100 / (d - 1))
-    out["avg_price"] = out["avg_dec"].apply(_dec_to_american)
+    out["avg_price"] = out["avg_imp"].apply(
+        lambda q: _dec_to_american(1.0 / q) if q and 0 < q < 1 else None)
     out["edge_gap"] = out["realized_ev"] - out["model_ev"]
     return out[["band", "n", "n_real", "avg_conf", "hit_rate",
                 "avg_price", "realized_ev", "model_ev", "edge_gap"]]
