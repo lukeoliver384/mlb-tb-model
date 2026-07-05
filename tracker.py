@@ -31,6 +31,14 @@ LOG_COLUMNS = ["date", "batter", "batter_id", "pitcher", "venue", "line", "prop"
                "proj", "pred_side", "p_over", "actual", "actual_side", "over_hit", "correct", "graded"]
 LOG_CSV = "tracker_log.csv"
 
+# Terminal grade states: a row is "done" if it graded (1) OR was voided. A void is
+# a projection/bet on a player who never recorded a stat line that day (DNP /
+# scratched from a projected lineup / postponed game) — permanently ungradeable, so
+# we stop retrying it instead of leaving it as a forever-"ungraded" zombie. Voids
+# are excluded from accuracy metrics (which filter to graded == 1), same as bets.
+VOID = "void"
+_TERMINAL = ("1", "1.0", "True", VOID)
+
 
 def _iso(x):
     """Normalize any date representation (incl. sheet-coerced M/D/YYYY) to YYYY-MM-DD."""
@@ -221,7 +229,7 @@ def grade_diagnostic(season: int) -> dict:
     cp = Counter()
     finals = {}
     for _, row in log.iterrows():
-        if str(row.get("graded")) in ("1", "1.0", "True"):
+        if str(row.get("graded")) in _TERMINAL:
             continue
         prop = str(row.get("prop") or "TB").upper() or "(blank)"
         d = _iso(row["date"])
@@ -258,14 +266,14 @@ def grade_diagnostic(season: int) -> dict:
     # date distribution of ALL ungraded rows (normalized) + today for reference
     ud = Counter()
     for _, row in log.iterrows():
-        if str(row.get("graded")) in ("1", "1.0", "True"):
+        if str(row.get("graded")) in _TERMINAL:
             continue
         ud[_iso(row["date"])] += 1
     out["_ungraded_by_date"] = dict(sorted(ud.items()))
     # raw date values for the first several ungraded rows: raw repr -> _iso -> ==today?
     samples = []
     for _, row in log.iterrows():
-        if str(row.get("graded")) in ("1", "1.0", "True"):
+        if str(row.get("graded")) in _TERMINAL:
             continue
         raw = row.get("date")
         samples.append({"raw": repr(raw), "type": type(raw).__name__,
@@ -281,7 +289,7 @@ def grade_diagnostic(season: int) -> dict:
         out["_today_final_venues"] = f"error: {e}"
     tv = set()
     for _, row in log.iterrows():
-        if str(row.get("graded")) in ("1", "1.0", "True"):
+        if str(row.get("graded")) in _TERMINAL:
             continue
         if _iso(row["date"]) == today:
             tv.add(str(row.get("venue", "")).strip())
@@ -291,17 +299,24 @@ def grade_diagnostic(season: int) -> dict:
     return out
 
 
-def grade(season: int) -> int:
-    """Fill actual result for ungraded rows whose game date has passed (prop-aware)."""
+def grade(season: int, void_days: int = 2) -> int:
+    """Fill actual result for ungraded rows whose game date has passed (prop-aware).
+
+    A row with no stat line found is left alone until it is `void_days` past its
+    game date, then marked VOID (the player never played — DNP / scratched from a
+    projected lineup / postponed game — so it will never grade). Voiding stops
+    these zombie rows from showing as forever-"ungraded". Returns the count of
+    rows changed (graded + newly voided)."""
     log = read_log()
     if log.empty:
         return 0
     log = log.astype(object)
     today = dt.date.today().isoformat()
+    today_d = dt.date.fromisoformat(today)
     finals = {}
     n = 0
     for i, row in log.iterrows():
-        if str(row.get("graded")) in ("1", "1.0", "True"):
+        if str(row.get("graded")) in _TERMINAL:
             continue
         d = _iso(row["date"])
         if d > today:
@@ -321,12 +336,22 @@ def grade(season: int) -> int:
         fn = D.player_hrr_on_date if prop == "HRR" else (D.player_k_on_date if prop == "K" else D.player_tb_on_date)
         try:
             actual = fn(bid, season, d)
-            if actual is None:
-                continue
+        except Exception:
+            continue
+        if actual is None:
+            # no stat line: void it once the game is well past (won't ever grade)
+            try:
+                age = (today_d - dt.date.fromisoformat(d)).days
+            except Exception:
+                age = 0
+            if age >= void_days:
+                log.at[i, "actual_side"] = VOID
+                log.at[i, "graded"] = VOID
+                n += 1
+            continue
+        try:
             ln = float(row["line"])           # blank/None line -> skip this row, not the whole run
         except (ValueError, TypeError):
-            continue
-        except Exception:
             continue
         a_side = "Over" if actual > ln else "Under"
         pred = str(row.get("pred_side") or "")
@@ -631,7 +656,7 @@ def grade_bets(season: int) -> int:
     finals = {}
     n = 0
     for i, row in bets.iterrows():
-        if str(row.get("graded")) in ("1", "1.0", "True"):
+        if str(row.get("graded")) in _TERMINAL:
             continue
         d = _iso(row["date"])
         if d > today:
