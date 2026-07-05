@@ -322,7 +322,8 @@ def run(date_str: str, season: int) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=dt.date.today().isoformat())
-    ap.add_argument("--season", type=int, default=int(os.environ.get("GRADE_SEASON", dt.date.today().year)))
+    ap.add_argument("--season", type=int,
+                    default=int(os.environ.get("GRADE_SEASON") or dt.date.today().year))
     args = ap.parse_args()
     res = run(args.date, args.season)
     summary = (f"Auto-log {args.date} — logged {res['logged']} rows {res['by_prop']} "

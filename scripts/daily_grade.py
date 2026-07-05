@@ -277,8 +277,8 @@ def _post_discord(msg: str) -> None:
 
 
 def main():
-    season = int(os.environ.get("GRADE_SEASON", dt.date.today().year))
-    void_days = int(os.environ.get("GRADE_VOID_DAYS", "2"))
+    season = int(os.environ.get("GRADE_SEASON") or dt.date.today().year)
+    void_days = int(os.environ.get("GRADE_VOID_DAYS") or "2")
     sh = _open_sheet()
     lg = grade_log(sh, season, void_days)
     bt = grade_bets(sh, season)
