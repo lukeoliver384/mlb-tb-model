@@ -478,6 +478,84 @@ def calibration_by_confidence(log: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def ev_by_confidence(log: pd.DataFrame, odds_lookup: dict | None = None,
+                     assumed_odds=-110, real_only: bool = False) -> pd.DataFrame:
+    """Realized betting EV per $1 staked, grouped by the model's leaned-side
+    confidence band — i.e. "which confidence bands actually make/lose money".
+
+    For each graded leg we bet the leaned side (P(Over) vs 50%) flat 1 unit at the
+    price logged for that exact side in `odds_lookup` (keyed like paper_sim:
+    (iso_date, PROP, batter)), falling back to `assumed_odds` where no price was
+    entered — unless `real_only`, which drops unpriced legs instead. Realized
+    return per unit is (decimal-1) on a win and -1 on a loss; averaged within a
+    band, that IS the band's realized EV per $1. We also report the band's
+    model-EXPECTED EV at the same prices (p_lean*(dec-1) - (1-p_lean)); comparing
+    the two separates a real edge from variance/small samples.
+
+    This is descriptive only — it prices history, it does not change the model.
+
+    Columns: band, n, n_real (priced with real odds), avg_conf, hit_rate,
+    avg_price (American), realized_ev, model_ev, edge_gap (realized - model).
+    """
+    if log is None or log.empty:
+        return pd.DataFrame()
+    g = log[log["graded"].astype(str).isin(["1", "1.0", "True"])].copy()
+    g["p"] = pd.to_numeric(g["p_over"], errors="coerce")
+    g["oh"] = pd.to_numeric(g["over_hit"], errors="coerce")
+    g = g.dropna(subset=["p", "oh"])
+    if g.empty:
+        return pd.DataFrame()
+    assumed = _american_to_decimal(assumed_odds)
+
+    rows = []
+    for _, r in g.iterrows():
+        p, oh = float(r["p"]), float(r["oh"])
+        conf = max(p, 1 - p)
+        band = confidence_band(p)
+        if not band:
+            continue
+        bet_over = p >= 0.5
+        rec = None
+        if odds_lookup:
+            rec = odds_lookup.get((_iso(r.get("date")), str(r.get("prop", "")).upper(),
+                                   str(r.get("batter", "")).strip()))
+        dec = _american_to_decimal(rec.get("over") if bet_over else rec.get("under")) if rec else None
+        used_real = dec is not None
+        if dec is None:
+            if real_only:
+                continue
+            dec = assumed
+        if not dec:
+            continue
+        win = bet_over == (oh > 0.5)
+        realized = (dec - 1.0) if win else -1.0
+        model_ev = conf * (dec - 1.0) - (1 - conf)
+        rows.append({"band": band, "conf": conf, "hit": int(win),
+                     "dec": dec, "realized": realized, "model_ev": model_ev,
+                     "used_real": int(used_real)})
+    if not rows:
+        return pd.DataFrame()
+    gr = pd.DataFrame(rows)
+    gr["band"] = pd.Categorical(gr["band"], categories=CONF_LABELS, ordered=True)
+    out = gr.groupby("band", observed=True).agg(
+        n=("hit", "size"),
+        n_real=("used_real", "sum"),
+        avg_conf=("conf", "mean"),
+        hit_rate=("hit", "mean"),
+        avg_dec=("dec", "mean"),
+        realized_ev=("realized", "mean"),
+        model_ev=("model_ev", "mean")).reset_index()
+    # average decimal price back to an American number for display
+    def _dec_to_american(d):
+        if not d or d <= 1:
+            return None
+        return round((d - 1) * 100) if d >= 2 else round(-100 / (d - 1))
+    out["avg_price"] = out["avg_dec"].apply(_dec_to_american)
+    out["edge_gap"] = out["realized_ev"] - out["model_ev"]
+    return out[["band", "n", "n_real", "avg_conf", "hit_rate",
+                "avg_price", "realized_ev", "model_ev", "edge_gap"]]
+
+
 # --------------------------------------------------------------------------- #
 # Bet log (ROI / P&L)                                                         #
 # --------------------------------------------------------------------------- #

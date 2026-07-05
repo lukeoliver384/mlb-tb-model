@@ -1682,6 +1682,57 @@ with tab_paper:
         _gvc = (_gdf["prop"].astype(str).str.upper().replace("", "(blank)").value_counts().to_dict()) if not _gdf.empty else {}
         st.caption(f"Diagnostic — graded by prop: {_gvc} · total rows {len(_log)}, graded {len(_gdf)}")
 
+    # ---- EV by confidence band — which bands actually make/lose money ---- #
+    st.markdown("#### EV by confidence band")
+    st.caption("Flat 1-unit bet on the model's leaned side of every graded projection, "
+               "priced at the odds you entered (fallback price where none), grouped by the "
+               "model's leaned-side confidence. **Realized EV** is what history actually paid "
+               "per $1; **Model EV** is what the model expected at those prices. Where realized "
+               "trails model, that band is overrated; where it beats, the edge is real. "
+               "Read small-n bands with caution.")
+    _evc_prop = st.radio("Prop", ["All", "TB", "H+R+RBI", "K"], horizontal=True, key="evc_prop")
+    _evc_map = {"H+R+RBI": "HRR"}
+    _evc_src = _log
+    if _evc_prop != "All" and _log is not None and not _log.empty:
+        _pk = _evc_map.get(_evc_prop, _evc_prop)
+        _evc_src = _log[_log["prop"].astype(str).str.upper() == _pk]
+    try:
+        _evtab = T.ev_by_confidence(_evc_src, odds_lookup=(_olu if _use_real else None),
+                                    assumed_odds=int(_po), real_only=(_use_real and _real_only))
+    except AttributeError:
+        _evtab = None
+        st.error("The server's tracker.py is out of date (ev_by_confidence missing). Reboot Streamlit Cloud to pick up the latest commit.")
+    if _evtab is not None and not _evtab.empty:
+        _evd = _evtab.copy()
+        for _pct in ("avg_conf", "hit_rate"):
+            _evd[_pct] = _evd[_pct] * 100.0        # display as percent (format adds the sign)
+        st.dataframe(
+            _evd, hide_index=True, use_container_width=True,
+            column_config={
+                "band": st.column_config.TextColumn("Conf band"),
+                "n": st.column_config.NumberColumn("Legs"),
+                "n_real": st.column_config.NumberColumn("Real-priced",
+                          help="How many of those legs used a real entered price (rest used the fallback)."),
+                "avg_conf": st.column_config.NumberColumn("Avg conf", format="%.1f%%"),
+                "hit_rate": st.column_config.NumberColumn("Hit rate", format="%.1f%%"),
+                "avg_price": st.column_config.NumberColumn("Avg price", format="%+d",
+                             help="Average American price paid on the leaned side in this band."),
+                "realized_ev": st.column_config.NumberColumn("Realized EV / $1", format="%+.3f",
+                               help="What this band actually returned per $1 staked, flat."),
+                "model_ev": st.column_config.NumberColumn("Model EV / $1", format="%+.3f",
+                            help="What the model expected to return per $1 at these prices."),
+                "edge_gap": st.column_config.NumberColumn("Realized − Model", format="%+.3f",
+                            help="Positive = band beat the model's own expectation; negative = band is overrated."),
+            })
+        _best = _evtab.loc[_evtab["realized_ev"].idxmax()]
+        _worst = _evtab.loc[_evtab["realized_ev"].idxmin()]
+        st.caption(f"Highest realized EV: **{_best['band']}** ({_best['realized_ev']*100:+.1f}% per $1, "
+                   f"n={int(_best['n'])}). Lowest: **{_worst['band']}** ({_worst['realized_ev']*100:+.1f}% per $1, "
+                   f"n={int(_worst['n'])}).")
+    elif _evtab is not None:
+        st.caption("No graded, priced legs for this selection yet. Enter odds on more picks "
+                   "(or uncheck 'Grade only picks I have odds for' above to use the fallback price).")
+
     def _render_paper(_gm2, _label, _evf=None):
         st.markdown(f"#### {_label}")
         _ev = _pev if _evf is None else _evf
