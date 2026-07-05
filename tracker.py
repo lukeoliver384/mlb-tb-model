@@ -582,6 +582,104 @@ def ev_by_confidence(log: pd.DataFrame, odds_lookup: dict | None = None,
 
 
 # --------------------------------------------------------------------------- #
+# Stake sizing — one source of truth for the live board AND the paper sim.    #
+#                                                                             #
+# Sizing is fractional Kelly on the model's probability, then scaled by a     #
+# CONTINUOUS, realized-performance multiplier keyed on the pick's leaned-side #
+# confidence band. It replaces the old data-sufficiency (★) stake factor:     #
+# how much a band has ACTUALLY paid is a better staking signal than how much  #
+# sample went into the projection. The multiplier touches the STAKE only — it #
+# never changes P(Over)/EV/Edge (calibration stays preview-only). With little #
+# graded data every band shrinks to a neutral 1.0, so this degrades to plain  #
+# fractional Kelly automatically — nothing to toggle.                         #
+# --------------------------------------------------------------------------- #
+
+# Midpoint confidence of each band, used to anchor the interpolation. "70%+"
+# is open-ended, so anchor it a little above its 0.70 floor.
+_BAND_MID = {"50-55%": 0.525, "55-60%": 0.575, "60-65%": 0.625,
+             "65-70%": 0.675, "70%+": 0.75}
+
+
+def band_stake_multipliers(log: pd.DataFrame, prop: str | None = None,
+                           odds_lookup: dict | None = None, assumed_odds=-110,
+                           real_only: bool = False, gain: float = 2.0,
+                           n0: float = 40.0, lo: float = 0.5, hi: float = 1.5):
+    """Realized-performance stake multipliers by confidence band, returned as
+    interpolation anchors.
+
+    For each band, `ev_by_confidence()` gives the realized EV per $1. The raw
+    multiplier `1 + gain*realized_ev` is clamped to [lo, hi], then shrunk toward
+    the neutral 1.0 by sample weight `n/(n+n0)` so thin bands barely move off
+    neutral. Returns a list of `(midpoint_confidence, multiplier, n)` sorted by
+    confidence — empty when there's no graded data (caller then sizes at a flat
+    1.0). Descriptive of history; it scales the STAKE only, never P/EV/Edge.
+    """
+    if log is not None and not log.empty and prop:
+        log = log[log["prop"].astype(str).str.upper() == str(prop).upper()]
+    ev = ev_by_confidence(log, odds_lookup=odds_lookup, assumed_odds=assumed_odds,
+                          real_only=real_only)
+    if ev is None or ev.empty:
+        return []
+    anchors = []
+    for _, r in ev.iterrows():
+        mid = _BAND_MID.get(str(r["band"]))
+        if mid is None:
+            continue
+        n = float(r["n"])
+        rev = float(r["realized_ev"])
+        m_raw = min(max(1.0 + gain * rev, lo), hi)
+        w = n / (n + n0) if (n + n0) else 0.0
+        anchors.append((mid, 1.0 + (m_raw - 1.0) * w, int(n)))
+    anchors.sort()
+    return anchors
+
+
+def stake_multiplier_at(conf: float, anchors) -> float:
+    """Continuous stake multiplier at leaned-side confidence `conf` (0.5..1),
+    linearly interpolating the band anchors and holding flat past either end.
+    Returns 1.0 when there are no anchors."""
+    if not anchors:
+        return 1.0
+    c = max(float(conf), 1.0 - float(conf))
+    if c <= anchors[0][0]:
+        return anchors[0][1]
+    if c >= anchors[-1][0]:
+        return anchors[-1][1]
+    for (x0, m0, _), (x1, m1, _) in zip(anchors, anchors[1:]):
+        if x0 <= c <= x1:
+            t = (c - x0) / (x1 - x0) if x1 > x0 else 0.0
+            return m0 + t * (m1 - m0)
+    return anchors[-1][1]
+
+
+def _size_fraction(p: float, dec: float, kelly_mult: float, max_frac: float,
+                   band_anchors=None):
+    """Core sizing on a DECIMAL price. Fractional Kelly on win prob `p`, scaled by
+    the band multiplier (neutral 1.0 when band_anchors is falsy), capped at
+    max_frac. Returns (fraction, components)."""
+    zero = {"kelly": 0.0, "kelly_mult": kelly_mult, "band_mult": 1.0,
+            "conf": max(p, 1.0 - p) if 0 < p < 1 else 0.0, "pre_cap": 0.0, "capped": 0.0}
+    if not dec or dec <= 1.0 or not (0.0 < p < 1.0):
+        return 0.0, zero
+    b = dec - 1.0
+    kelly = max(0.0, (p * dec - 1.0) / b) if b > 0 else 0.0
+    conf = max(p, 1.0 - p)
+    mult = stake_multiplier_at(conf, band_anchors) if band_anchors else 1.0
+    pre = kelly * kelly_mult * mult
+    capped = min(pre, max_frac)
+    return capped, {"kelly": kelly, "kelly_mult": kelly_mult, "band_mult": mult,
+                    "conf": conf, "pre_cap": pre, "capped": capped}
+
+
+def stake_fraction(p: float, odds, kelly_mult: float = 0.25, max_frac: float = 0.10,
+                   band_anchors=None):
+    """Unified stake sizing on an AMERICAN price. See `_size_fraction`. Returns
+    (fraction_of_bankroll, components)."""
+    return _size_fraction(p, _american_to_decimal(odds), kelly_mult, max_frac,
+                          band_anchors)
+
+
+# --------------------------------------------------------------------------- #
 # Bet log (ROI / P&L)                                                         #
 # --------------------------------------------------------------------------- #
 def _bet_ws():
@@ -887,7 +985,6 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
                       regardless of the lean. Requires entered odds (uses odds_lookup).
     Returns (summary, curve)."""
     import pandas as pd
-    import math as _m
     empty = pd.DataFrame(columns=["n", "bankroll"])
     if log is None or log.empty:
         return {"n": 0}, empty
@@ -900,11 +997,6 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
     assumed = _american_to_decimal(odds)
     if not assumed:
         return {"n": 0}, empty
-
-    def _cal(pp, t):
-        if not t or t == 1.0 or not (0 < pp < 1):
-            return pp
-        return 1.0 / (1.0 + _m.exp(-(_m.log(pp / (1 - pp)) / t)))
 
     i = wins = n_real = 0
     profit = staked = be_sum = 0.0
@@ -947,11 +1039,13 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
 
         be = 1.0 / dec
         if stake_mode == "kelly":
-            _t = (temp_map.get(prop_u, temp) if temp_map else temp)
-            pk = _cal(pbet, _t)
-            b = dec - 1.0
-            f = ((b * pk - (1 - pk)) / b) if b > 0 else 0.0
-            f = min(max(0.0, f) * kelly_mult, max_frac)
+            # Same sizer the live board uses, so the paper bankroll simulates the
+            # real staking rule. No band multiplier here on purpose: fitting it on
+            # the same history we then re-bet would be look-ahead — the live board
+            # applies band multipliers fit on PAST grades to NEW picks, which is
+            # legitimate, but a same-set replay is not. This is the honest flat-
+            # Kelly baseline; the derived band multipliers are shown separately.
+            f, _ = _size_fraction(pbet, dec, kelly_mult, max_frac)
             stake = f * start_units
         else:
             stake = 0.01 * start_units

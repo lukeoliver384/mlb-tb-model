@@ -182,7 +182,7 @@ def _seed(k, default):
 
 _seed("ui_prop", "Total Bases")
 _seed("ui_line", 1.5); _seed("ui_tossup", 0.03); _seed("ui_minedge", 0.05)
-_seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0); _seed("ui_confstake", True)
+_seed("ui_kelly", 0.25); _seed("ui_maxstake", 5.0); _seed("ui_shrink", 0.0)
 _seed("ui_regtb", int(E.REG_K_PA)); _seed("ui_reghrr", int(E.REG_K_PA)); _seed("ui_regkmod", int(getattr(E, "REG_KMODEL", 70)))
 _seed("ui_splits", True); _seed("ui_homeaway", True); _seed("ui_components", True)
 _seed("ui_method", "Exact distribution (recommended)"); _seed("ui_calib", False)
@@ -210,9 +210,10 @@ with st.sidebar:
         min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, step=0.01, key="ui_minedge")
         kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, step=0.05, key="ui_kelly",
                                help="0.25 = quarter Kelly.")
-        conf_stake = st.checkbox("Scale stakes by confidence", key="ui_confstake",
-                                 help="Shrink the Kelly stake for thinner-sample picks: 5★ full, 4★ 0.9, 3★ 0.7, 2★ 0.5, 1★ 0.25. Tuned so 4★ (the realistic top) stays near full size.")
         max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, step=0.5, key="ui_maxstake")
+        st.caption("Stakes = fractional Kelly × a band multiplier learned from how each "
+                   "confidence band has *actually* paid (see Paper Bankroll → EV by band). "
+                   "Data-sufficiency (★) no longer affects stake — it's a sample-size flag only.")
         conf_shrink = st.slider("Shrink toward market (optional)", 0.0, 0.6, step=0.05, key="ui_shrink")
         try:
             _bk0 = float(T.get_setting("start_bankroll", 1000.0) or 1000.0)
@@ -286,7 +287,7 @@ with st.sidebar:
         w_kwhiff = st.slider("Weight on SwStr-implied K", 0.0, 1.0, step=0.05, key="ui_wkwhiff", disabled=not use_kwhiff)
 
 # Persist sidebar settings (one write only when something changed)
-_uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink", "ui_confstake",
+_uikeys = ["ui_prop", "ui_line", "ui_tossup", "ui_minedge", "ui_kelly", "ui_maxstake", "ui_shrink",
            "ui_regtb", "ui_reghrr", "ui_regkmod", "ui_splits", "ui_homeaway", "ui_components", "ui_calib", "ui_autocal", "ui_hrrdisp", "ui_kdisp", "ui_lineupctx", "ui_tbtemp", "ui_hrrtemp", "ui_ktemp",
            "ui_park", "ui_parkstr", "ui_weather", "ui_weatherstr", "ui_autobp", "ui_spshare", "ui_bprate",
            "ui_statcast", "ui_wstatcast", "ui_arsenal", "ui_recent", "ui_recentdays", "ui_wrecent",
@@ -364,7 +365,7 @@ def _invalidate_tracker_cache():
     # The read-only analytics below are memoized on the log/bets content, so a
     # fresh log/grade must also clear their cached results.
     for _fn in (_c_metrics, _c_pred_breakdown, _c_calib_conf, _c_calib_prob,
-                _c_calib_prob_platt, _c_bankroll_curve, _c_clv_metrics):
+                _c_calib_prob_platt, _c_bankroll_curve, _c_clv_metrics, _c_band_anchors):
         try:
             _fn.clear()
         except Exception:
@@ -403,6 +404,19 @@ def _c_bankroll_curve(bets, start):
 @st.cache_data(show_spinner=False)
 def _c_clv_metrics(cb):
     return T.clv_metrics(cb)
+
+@st.cache_data(show_spinner=False)
+def _c_band_anchors(plog, prop):
+    """Continuous stake multipliers by confidence band, learned from realized EV
+    on the graded log for this prop. Memoized on the log content so the odds read
+    + groupby don't rerun on every keystroke. Empty -> live sizing is flat Kelly."""
+    try:
+        _lu = {}
+        for (_d, _pr, _gm, _bt), _rec in T.read_odds().items():
+            _lu[(T._iso(_d), str(_pr).upper(), str(_bt).strip())] = _rec
+        return T.band_stake_multipliers(plog, prop=prop, odds_lookup=_lu)
+    except Exception:
+        return []
 
 colA, colB = st.columns([1, 5])
 with colA:
@@ -877,9 +891,9 @@ with tab_bet:
                 "vsSP%": st.column_config.NumberColumn("vs SP", format="%d%%", help="Share of PAs vs the starter"),
                 proj_col: st.column_config.NumberColumn(proj_col, format="%.2f"),
                 "P(Over)": st.column_config.NumberColumn("P(Over)", format="%.1f%%"),
-                "Lean %": st.column_config.NumberColumn("Lean %", format="%.0f%%", help="Model probability on the side it leans"),
+                "Lean %": st.column_config.NumberColumn("Lean %", format="%.0f%%", help="Win-confidence: model probability on the side it leans. This (not Data ★) is what drives staking and the confidence bands."),
                 "Fair Over odds": st.column_config.NumberColumn("Fair Over", format="%+d"),
-                "Conf": st.column_config.TextColumn("Conf", help="Data-quality confidence (sample size + split depth), not edge"),
+                "Conf": st.column_config.TextColumn("Data ★", help="Data sufficiency — how much sample + split depth backs the projection. NOT win-confidence (see Lean %) and NOT used for staking."),
                 "Wx": st.column_config.TextColumn("Weather"),
             })
 
@@ -1192,8 +1206,9 @@ with tab_bet:
                 return None
 
         results = []
-        _confmap = {(r["Game"], r["Batter"]): int(r.get("Conf", 3)) for _, r in df.iterrows()} if (df is not None and not df.empty and "Conf" in df.columns) else {}
-        _CONF_FACTOR = {5: 1.0, 4: 0.9, 3: 0.7, 2: 0.5, 1: 0.25}
+        # Realized-performance stake multipliers for this prop (neutral 1.0 when
+        # there's little graded history — sizing then reduces to flat Kelly).
+        band_anchors = _c_band_anchors(_log, STAT)
         for _, row in edited.iterrows():
             over_odds, under_odds = _num(row["Over odds"]), _num(row["Under odds"])
             if over_odds is None and under_odds is None:
@@ -1224,8 +1239,8 @@ with tab_bet:
                     _p_size = (1 - conf_shrink) * p_model + conf_shrink * _mkt
                 else:
                     _p_size = p_model
-                _cf = _CONF_FACTOR.get(_confmap.get((row["Game"], row["Batter"]), 3), 0.45) if conf_stake else 1.0
-                kel = min(E.kelly_fraction(_p_size, odds) * kelly_mult * _cf, max_stake / 100.0)
+                kel, _ = T.stake_fraction(_p_size, odds, kelly_mult=kelly_mult,
+                                          max_frac=max_stake / 100.0, band_anchors=band_anchors)
                 results.append({
                     "Game": row["Game"], "Batter": row["Batter"], "Line": line,
                     "Side": sidelabel, "Model P": round(p_model, 3), "Odds": odds,
@@ -1247,7 +1262,7 @@ with tab_bet:
                 rdf = rdf[rdf["Odds"] > 0]
             rdf = rdf.sort_values("Model EV", ascending=False)
             _cmap = {(r["Game"], r["Batter"]): r.get("Conf", 3) for _, r in df.iterrows()}
-            rdf["Conf"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
+            rdf["Data ★"] = rdf.apply(lambda r: "★" * int(_cmap.get((r["Game"], r["Batter"]), 3)), axis=1)
             # Which calibration bucket this pick sits in — same bin edges as the
             # "Confidence vs actual hit rate" table, from the leaned-side confidence.
             rdf.insert(rdf.columns.get_loc("Model P") + 1, "Band",
@@ -1270,7 +1285,7 @@ with tab_bet:
             if not _val.empty:
                 st.subheader("Top 5 value plays")
                 st.caption("Ranked by expected ROI at your price (not hit rate) — plus-money value floats up.")
-                _vshow = _val[["Batter", "Side", "Line", "Odds", "Model P", "Band", "Model EV", "Edge", "Stake $", "Conf"]].copy()
+                _vshow = _val[["Batter", "Side", "Line", "Odds", "Model P", "Band", "Model EV", "Edge", "Stake $", "Data ★"]].copy()
                 _vshow["Edge"] = _vshow["Edge"] * 100      # fraction -> percentage points
                 _vshow["Model EV"] = _vshow["Model EV"] * 100
                 _vshow["Model P"] = _vshow["Model P"] * 100
@@ -1304,7 +1319,7 @@ with tab_bet:
                                file_name=f"tb_edges_{date.isoformat()}.csv")
 
             st.markdown("**Log the plays you're betting**")
-            st.caption("Stake is in DOLLARS (defaults to Kelly fraction × your bankroll). "
+            st.caption("Stake is in DOLLARS (defaults to fractional Kelly × the band multiplier × your bankroll). "
                        "Edit it to what you actually bet, then tick and log — the bankroll ledger sums these.")
             _bsig = tuple((str(r["Batter"]), str(r["Side"]), str(r["Odds"]), str(r["Line"]))
                           for _, r in rdf.iterrows())
@@ -1732,6 +1747,35 @@ with tab_paper:
     elif _evtab is not None:
         st.caption("No graded, priced legs for this selection yet. Enter odds on more picks "
                    "(or uncheck 'Grade only picks I have odds for' above to use the fallback price).")
+
+    # ---- Stake multipliers derived from the realized EV above ---- #
+    st.markdown("#### Band stake multipliers")
+    st.caption("The multiplier applied to each Kelly stake, per confidence band — the same "
+               "computation the Projections board uses (there it runs on the board's prop; "
+               "here it follows the prop/odds toggles above). Learned from the realized EV "
+               "table, it shrinks toward a neutral **1.00** on thin samples, so early on every "
+               "band ≈ 1.00 (plain fractional Kelly) and only ramps where a band has *earned* "
+               "it. Stake-only — never touches P/EV/Edge.")
+    _bm_prop = None if _evc_prop == "All" else _evc_map.get(_evc_prop, _evc_prop)
+    _anchors = T.band_stake_multipliers(_evc_src, prop=_bm_prop,
+                                        odds_lookup=(_olu if _use_real else None),
+                                        assumed_odds=int(_po),
+                                        real_only=(_use_real and _real_only))
+    if _anchors:
+        _amap = {round(mid, 3): (mult, n) for mid, mult, n in _anchors}
+        _brows = []
+        for _lbl in T.CONF_LABELS:
+            _mid = round(T._BAND_MID[_lbl], 3)
+            _mult, _n = _amap.get(_mid, (1.0, 0))
+            _brows.append({"Conf band": _lbl, "Stake ×": round(_mult, 2), "Legs": int(_n)})
+        st.dataframe(pd.DataFrame(_brows), hide_index=True, use_container_width=True,
+                     column_config={
+                         "Stake ×": st.column_config.NumberColumn("Stake ×", format="%.2f",
+                                    help="Kelly stake is multiplied by this in that band. >1 bets more, <1 less."),
+                         "Legs": st.column_config.NumberColumn("Legs", help="Graded, priced legs behind this band."),
+                     })
+    else:
+        st.caption("Not enough graded history yet — the board is sizing at a flat 1.00× (plain fractional Kelly).")
 
     def _render_paper(_gm2, _label, _evf=None):
         st.markdown(f"#### {_label}")
