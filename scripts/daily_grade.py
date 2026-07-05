@@ -80,6 +80,30 @@ def _american_to_decimal_profit(a) -> float:
     return v / 100.0 if v > 0 else 100.0 / abs(v)
 
 
+def _parse_service_account(raw: str) -> dict:
+    """Accept the service account as JSON OR as the Streamlit [gcp_service_account]
+    TOML block (with or without the section header) — whichever the user pasted
+    into the secret. Raises a clear error if it's neither (e.g. only the key)."""
+    raw = (raw or "").strip()
+    try:
+        return json.loads(raw)                       # a proper JSON object
+    except Exception:
+        pass
+    try:
+        import tomllib                                # stdlib on 3.11+
+        data = tomllib.loads(raw)
+        if isinstance(data.get("gcp_service_account"), dict):
+            return data["gcp_service_account"]        # full [gcp_service_account] block
+        if "private_key" in data and "client_email" in data:
+            return data                               # just the fields, no header
+    except Exception:
+        pass
+    raise SystemExit(
+        "GCP_SERVICE_ACCOUNT_JSON is not usable. Paste the FULL service-account key "
+        "(the whole JSON object starting with '{', or your Streamlit "
+        "[gcp_service_account] TOML block) — not just the private_key.")
+
+
 def _open_sheet():
     sa_raw = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")
     if not sa_raw:
@@ -87,11 +111,11 @@ def _open_sheet():
     import gspread
     from google.oauth2.service_account import Credentials
     creds = Credentials.from_service_account_info(
-        json.loads(sa_raw),
+        _parse_service_account(sa_raw),
         scopes=["https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/drive"])
     gc = gspread.authorize(creds)
-    name = os.environ.get("TRACKER_SHEET_NAME", "MLB TB Tracker")
+    name = os.environ.get("TRACKER_SHEET_NAME") or "MLB TB Tracker"
     return gc.open(name)
 
 
