@@ -1,0 +1,35 @@
+name: Auto-log slate projections
+
+on:
+  schedule:
+    # Runs hourly across the window when lineups post and games start, so each
+    # game is logged shortly after its official lineup drops and BEFORE first
+    # pitch (the script gates on abstractGameState == "Preview" and confirmed
+    # lineups, and is idempotent, so overlapping/repeat runs never double-log).
+    # UTC (GitHub cron has no DST): 15:00-02:00 UTC ≈ 11:00 AM - 10:00 PM ET (EDT).
+    - cron: "0 15-23 * * *"
+    - cron: "0 0-2 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Slate date YYYY-MM-DD (default: today UTC)"
+        required: false
+
+jobs:
+  autolog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests gspread google-auth
+
+      - run: python scripts/daily_log.py ${{ github.event.inputs.date && format('--date {0}', github.event.inputs.date) || '' }}
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          TRACKER_SHEET_NAME: ${{ secrets.TRACKER_SHEET_NAME }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GRADE_SEASON: ${{ secrets.GRADE_SEASON }}
