@@ -252,6 +252,25 @@ def main():
          + f" · blank-line rows: {oblank}")
     emit("     line values: " + ", ".join(f"{k}:{v}" for k, v in
          sorted(olines.items(), key=lambda kv: (-kv[1]))[:12]))
+    # price shape of TB rows at each stored line — a real 0.5 line is heavy chalk on
+    # the over (-250ish); a mis-tagged 1.5 would be plus-money.
+    for want in ("0.5", "1.5", "2.5"):
+        ov, un = [], []
+        for r in odds_rows:
+            if str(r.get("prop", "") or "TB").upper() != "TB":
+                continue
+            if str(r.get("line", "")).strip() != want:
+                continue
+            do, du = _dec(r.get("over")), _dec(r.get("under"))
+            if do:
+                ov.append(1.0 / do)
+            if du:
+                un.append(1.0 / du)
+        if ov or un:
+            ao = _amer(1.0 / (sum(ov) / len(ov))) if ov else None
+            au = _amer(1.0 / (sum(un) / len(un))) if un else None
+            emit(f"     TB@{want}: {len(ov)} over avg {('%+d' % ao) if ao else '-'}, "
+                 f"{len(un)} under avg {('%+d' % au) if au else '-'}")
     emit(f"[2b] JOIN of {n_graded} graded legs: no-odds-row={j_nokey} · "
          f"row-but-no-price={j_priceblank} · line-blank(kept)={j_lineblank} · "
          f"line-match={j_linematch} · line-MISMATCH(dropped)={j_linemismatch}")
