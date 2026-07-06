@@ -157,6 +157,9 @@ def main():
     tb_band_real = defaultdict(list)
     monthly = defaultdict(int)
     n_graded = n_priced = n_norm_only = n_linemis = 0
+    # join diagnostics
+    j_nokey = j_lineblank = j_linematch = j_linemismatch = j_priceblank = 0
+    mismatch_pairs = defaultdict(int)     # (log_line -> odds_line) -> count
     dmin, dmax = "9999", "0000"
     FALLBACK_DEC = _dec(-110)
 
@@ -190,6 +193,21 @@ def main():
             o = o2
         dec = _dec(o.get("over") if bet_over else o.get("under")) if o else None
 
+        # --- join diagnostics: why does a leg end up priced or not? --- #
+        if o is None:
+            j_nokey += 1
+        elif dec is None:
+            j_priceblank += 1          # matched a row but the leaned side had no price
+        else:
+            ol = _fline(o.get("line"))
+            if not str(o.get("line", "")).strip():
+                j_lineblank += 1       # odds row has no line -> we keep it
+            elif ol is not None and logln is not None and abs(ol - logln) > 1e-9:
+                j_linemismatch += 1
+                mismatch_pairs[(f"{logln:g}", f"{ol:g}")] += 1
+            else:
+                j_linematch += 1
+
         # Drop a price stored for a different line than the graded leg (a 0.5 price
         # is not this 1.5 bet) — mirrors tracker._line_matches.
         if dec is not None and o.get("line") and logln is not None:
@@ -219,6 +237,28 @@ def main():
     emit(f"[2] Real leaned-side price: {n_priced}/{n_graded} "
          f"({100*n_priced/n_graded:.0f}%). Accent-recovered: {n_norm_only}. "
          f"Line-mismatch DROPPED: {n_linemis}.")
+
+    # odds store shape
+    oprops = defaultdict(int); olines = defaultdict(int); oblank = 0
+    for r in odds_rows:
+        oprops[str(r.get("prop", "") or "?").upper()] += 1
+        lv = str(r.get("line", "")).strip()
+        if lv:
+            olines[lv] += 1
+        else:
+            oblank += 1
+    emit(f"[2a] ODDS STORE: {len(odds_rows)} rows · props "
+         + ", ".join(f"{k}:{v}" for k, v in sorted(oprops.items()))
+         + f" · blank-line rows: {oblank}")
+    emit("     line values: " + ", ".join(f"{k}:{v}" for k, v in
+         sorted(olines.items(), key=lambda kv: (-kv[1]))[:12]))
+    emit(f"[2b] JOIN of {n_graded} graded legs: no-odds-row={j_nokey} · "
+         f"row-but-no-price={j_priceblank} · line-blank(kept)={j_lineblank} · "
+         f"line-match={j_linematch} · line-MISMATCH(dropped)={j_linemismatch}")
+    if mismatch_pairs:
+        top = sorted(mismatch_pairs.items(), key=lambda kv: -kv[1])[:10]
+        emit("     mismatch (logLine->oddsLine): " +
+             ", ".join(f"{a}->{b}:{c}" for (a, b), c in top))
 
     emit("")
     emit("[3] TRACK RECORD — flat 1u, leaned side")
