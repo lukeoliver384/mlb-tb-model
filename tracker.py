@@ -503,6 +503,18 @@ def calibration_by_confidence(log: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _line_matches(rec: dict, row_line) -> bool:
+    """True unless BOTH the odds record and the log row carry a parseable line and
+    they differ — a stored price for a different line than the one graded must not
+    be attached to the leg (audit 2026-07-06 found ~24% of matched legs affected)."""
+    try:
+        ol = float(str(rec.get("line", "")).strip())
+        rl = float(str(row_line).strip())
+    except (TypeError, ValueError):
+        return True
+    return abs(ol - rl) < 1e-9
+
+
 def ev_by_confidence(log: pd.DataFrame, odds_lookup: dict | None = None,
                      assumed_odds=-110, real_only: bool = False) -> pd.DataFrame:
     """Realized betting EV per $1 staked, grouped by the model's leaned-side
@@ -544,6 +556,8 @@ def ev_by_confidence(log: pd.DataFrame, odds_lookup: dict | None = None,
         if odds_lookup:
             rec = odds_lookup.get((_iso(r.get("date")), str(r.get("prop", "")).upper(),
                                    str(r.get("batter", "")).strip()))
+        if rec is not None and not _line_matches(rec, r.get("line")):
+            rec = None          # price belongs to a different line — don't attach it
         dec = _american_to_decimal(rec.get("over") if bet_over else rec.get("under")) if rec else None
         used_real = dec is not None
         if dec is None:
@@ -1010,6 +1024,8 @@ def paper_sim(log, odds=-110, only_plus_ev=True, start_units=100.0, odds_lookup=
         p = float(r["p"]); oh = float(r["oh"])
         prop_u = str(r.get("prop", "")).upper()
         rec = odds_lookup.get((_iso(r.get("date")), prop_u, str(r.get("batter", "")).strip())) if odds_lookup else None
+        if rec is not None and not _line_matches(rec, r.get("line")):
+            rec = None          # price is for a different line than the graded one
 
         if mode == "value":
             do = _american_to_decimal(rec.get("over")) if rec else None
