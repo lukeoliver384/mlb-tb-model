@@ -152,7 +152,8 @@ def main():
 
     by_prop_all = defaultdict(list)
     by_prop_real = defaultdict(list)
-    by_line = defaultdict(list)          # (prop, line_str) -> legs, real-priced only
+    by_line = defaultdict(list)          # (prop, line_str) -> legs, real-priced+matched
+    log_by_line = defaultdict(list)      # (prop, line_str) -> win bools, ALL graded legs
     tb_band_real = defaultdict(list)
     monthly = defaultdict(int)
     n_graded = n_priced = n_norm_only = n_linemis = 0
@@ -179,6 +180,7 @@ def main():
         bet_over = p >= 0.5
         win = bet_over == (oh > 0.5)
         logln = _fline(rec.get("line"))
+        log_by_line[(prop, f"{logln:g}" if logln is not None else "?")].append(win)
 
         o = olu.get((d, prop, batter))
         if o is None:
@@ -228,7 +230,17 @@ def main():
                 emit(f"    {prop:4} {lbl:11} {s['n']:>5} {s['hit']*100:>5.1f}% {_px(s):>6} {s['roi']*100:>+6.1f}%")
 
     emit("")
-    emit("[4] BY LINE — real-priced only (0.5=chalk, 1.5/2.5=plus-money)")
+    emit("[4a] ALL GRADED LEGS BY LOGGED LINE (hit% only — shows where legs sit)")
+    emit(f"    {'prop':4} {'line':>5} {'n':>6} {'hit':>6}")
+    for prop in ("TB", "HRR", "K"):
+        lks = sorted([lk for (pp, lk) in log_by_line if pp == prop],
+                     key=lambda x: (x == "?", _fline(x) if x != "?" else 99))
+        for lk in lks:
+            wl = log_by_line[(prop, lk)]
+            emit(f"    {prop:4} {lk:>5} {len(wl):>6} {100*sum(wl)/len(wl):>5.1f}%")
+
+    emit("")
+    emit("[4b] REAL-PRICED+MATCHED LEGS BY LINE (price & outcome on the SAME line)")
     emit(f"    {'prop':4} {'line':>5} {'n':>5} {'hit':>6} {'avgPx':>6} {'ROI':>7}")
     for prop in ("TB", "HRR", "K"):
         lks = sorted([lk for (pp, lk) in by_line if pp == prop],
@@ -253,8 +265,8 @@ def main():
              f"A {CLAIMED_TB_ROI*100:.0f}% ROI would need avg {need:+d}.")
 
     emit("")
-    emit("[7] REAL-MONEY BETS LEDGER (ground truth)")
-    bp = defaultdict(lambda: {"n": 0, "staked": 0.0, "profit": 0.0, "w": 0, "l": 0})
+    emit("[7] REAL-MONEY BETS LEDGER (ground truth) — overall and BY LINE")
+    bp = defaultdict(lambda: {"n": 0, "staked": 0.0, "profit": 0.0, "w": 0, "l": 0, "imp": 0.0, "ni": 0})
     for r in bet_rows:
         if str(r.get("graded")) not in GRADED:
             continue
@@ -265,16 +277,35 @@ def main():
             stake = float(r.get("stake")); profit = float(r.get("profit"))
         except (TypeError, ValueError):
             continue
-        for k in (str(r.get("prop") or "TB").upper(), "ALL"):
+        prop = str(r.get("prop") or "TB").upper()
+        ln = _fline(r.get("line"))
+        d = _dec(r.get("odds"))
+        keys = [(prop, "ALL"), (prop, f"{ln:g}" if ln is not None else "?"), ("ALL", "ALL")]
+        for k in keys:
             b = bp[k]
             b["n"] += 1; b["staked"] += stake; b["profit"] += profit
             b["w"] += res == "win"; b["l"] += res == "loss"
-    for k in ("TB", "HRR", "K", "ALL"):
-        if k in bp:
-            b = bp[k]; dcd = b["w"] + b["l"]
-            roi = b["profit"] / b["staked"] if b["staked"] else 0.0
-            emit(f"    {k:4} n={b['n']:<4} {b['w']}-{b['l']}  "
-                 f"hit {(100*b['w']/dcd if dcd else 0):.1f}%  P/L ${b['profit']:+,.0f}  ROI {roi*100:+.1f}%")
+            if d:
+                b["imp"] += 1.0 / d; b["ni"] += 1
+
+    def _row(label, b):
+        dcd = b["w"] + b["l"]
+        roi = b["profit"] / b["staked"] if b["staked"] else 0.0
+        avg = _amer(1.0 / (b["imp"] / b["ni"])) if b["ni"] else None
+        avgs = f"{avg:+d}" if avg is not None else "-"
+        return (f"    {label:12} n={b['n']:<4} {b['w']}-{b['l']}  hit {(100*b['w']/dcd if dcd else 0):4.1f}%  "
+                f"avgPx {avgs:>6}  staked ${b['staked']:,.0f}  P/L ${b['profit']:+,.0f}  ROI {roi*100:+.1f}%")
+
+    for prop in ("TB", "HRR", "K"):
+        if (prop, "ALL") not in bp:
+            continue
+        emit(_row(f"{prop} (all)", bp[(prop, "ALL")]))
+        lks = sorted([lk for (pp, lk) in bp if pp == prop and lk != "ALL"],
+                     key=lambda x: (x == "?", _fline(x) if x != "?" else 99))
+        for lk in lks:
+            emit(_row(f"  {prop} @ {lk}", bp[(prop, lk)]))
+    if ("ALL", "ALL") in bp:
+        emit(_row("ALL", bp[("ALL", "ALL")]))
 
     report = "\n".join(out)
     print(report)
