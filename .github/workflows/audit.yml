@@ -1,0 +1,21 @@
+name: Record audit (read-only)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests gspread google-auth tzdata
+
+      - run: python scripts/audit_record.py
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          TRACKER_SHEET_NAME: ${{ secrets.TRACKER_SHEET_NAME }}
