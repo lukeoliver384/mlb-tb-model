@@ -208,8 +208,8 @@ with st.sidebar:
         tossup_band = st.slider("Toss-up band (± from 50%)", 0.0, 0.10, step=0.01, key="ui_tossup",
                                 help="Within this of 50% = 'No clear lean'.")
         min_edge = st.slider("Flag VALUE at edge ≥", 0.0, 0.20, step=0.01, key="ui_minedge")
-        kelly_mult = st.slider("Kelly fraction", 0.1, 1.0, step=0.05, key="ui_kelly",
-                               help="0.25 = quarter Kelly.")
+        kelly_mult = st.slider("Kelly fraction", 0.05, 1.0, step=0.025, key="ui_kelly",
+                               help="0.25 = quarter Kelly, 0.125 = eighth Kelly. Lower = ~proportionally lower drawdown.")
         max_stake = st.number_input("Max stake (% bankroll)", 0.5, 25.0, step=0.5, key="ui_maxstake")
         st.caption("Stakes = fractional Kelly × a band multiplier learned from how each "
                    "confidence band has *actually* paid (see Paper Bankroll → EV by band). "
