@@ -1,6 +1,11 @@
 name: Record audit (read-only)
 
 on:
+  schedule:
+    # Weekly, Monday 08:00 US Central (13:00 UTC in CDT). Read-only; posts the
+    # full record audit to Discord. GitHub cron is UTC/no-DST -> 7 AM once CST
+    # returns in Nov; harmless for a weekly digest.
+    - cron: "0 13 * * 1"
   workflow_dispatch: {}
 
 jobs:
@@ -19,3 +24,4 @@ jobs:
         env:
           GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
           TRACKER_SHEET_NAME: ${{ secrets.TRACKER_SHEET_NAME }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
