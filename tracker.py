@@ -123,9 +123,46 @@ def _gsheet():
         ws = sh.sheet1
         if not ws.row_values(1):
             ws.append_row(LOG_COLUMNS)
+        try:
+            st.session_state.pop('_gsheet_error', None)
+        except Exception:
+            pass
         return ws
-    except Exception:
+    except Exception as _e:
+        try:
+            if 'gcp_service_account' in st.secrets:
+                st.session_state['_gsheet_error'] = str(_e)
+        except Exception:
+            pass
         return None
+
+
+def _sheet_row_count(ws) -> int:
+    try:
+        return max(len(ws.get_all_values()) - 1, 0)
+    except Exception:
+        return 0
+
+
+def _shrink_blocked(ws, new_len: int, label: str) -> bool:
+    """Refuse to overwrite a durable sheet with a drastically smaller dataset.
+    Protects against a failed read (empty fallback) triggering a clear+rewrite that
+    would wipe history. Normal writes only grow or stay flat, so this never trips in
+    healthy operation."""
+    cur = _sheet_row_count(ws)
+    if cur >= 100 and new_len < cur * 0.5:
+        msg = (f"Write blocked to protect your {label}: the sheet has {cur} rows but this "
+               f"save only had {new_len}, so your history was NOT overwritten. This almost "
+               "always means a Google Sheets read failed and the app fell back to empty "
+               "storage. Reload the app; if it persists, check the Google service-account "
+               "credentials in the app's Secrets.")
+        try:
+            st.session_state['_write_guard_tripped'] = msg
+            st.warning('\u26a0\ufe0f ' + msg)
+        except Exception:
+            pass
+        return True
+    return False
 
 
 def backend_name() -> str:
@@ -154,6 +191,8 @@ def write_log(df: pd.DataFrame) -> str:
     df = df[LOG_COLUMNS]
     ws = _gsheet()
     if ws:
+        if _shrink_blocked(ws, len(df), 'grading log'):
+            return 'blocked-guard'
         try:
             ws.clear()
             body = [LOG_COLUMNS] + df.astype(object).where(pd.notna(df), "").values.tolist()
@@ -737,6 +776,8 @@ def write_bets(df: pd.DataFrame) -> str:
     df = df[BET_COLUMNS]
     ws = _bet_ws()
     if ws:
+        if _shrink_blocked(ws, len(df), 'bet log'):
+            return 'blocked-guard'
         try:
             ws.clear()
             ws.update([BET_COLUMNS] + df.astype(object).where(pd.notna(df), "").values.tolist())
@@ -953,6 +994,8 @@ def write_odds(store: dict) -> str:
             for (d, prop, game, batter), rec in store.items()]
     ws = _odds_ws()
     if ws:
+        if _shrink_blocked(ws, len(rows), 'odds history'):
+            return 'blocked-guard'
         try:
             ws.clear()
             ws.update([ODDS_COLUMNS] + rows)
