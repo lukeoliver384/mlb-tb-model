@@ -1397,6 +1397,27 @@ with tab_perf:
     st.caption(f"Storage: {T.backend_name()}. Log a slate, then grade it after games finish "
                "to track projection error and calibration over time.")
 
+    _bk = T.backend_name()
+    if _bk.startswith("SQLite"):
+        st.error("⚠️ Storage is on the local SQLite fallback — your Google Sheet is NOT connected, "
+                 "so history is not being read or saved durably. Expand diagnostics below to see why.")
+        with st.expander("🔧 Google Sheets connection diagnostics", expanded=True):
+            _dg = T.gsheet_diagnostic()
+            st.write({
+                "secret [gcp_service_account] present": _dg["secret_present"],
+                "service-account fields found": _dg["keys"],
+                "service-account email (share the Sheet with this)": _dg["client_email"],
+                "sheet name it is looking for": _dg["sheet_name"],
+                "connected OK": _dg["ok"],
+                "error": _dg["error"] or "(none)",
+            })
+            st.caption("Fix checklist: (1) the [gcp_service_account] block exists in Manage app → "
+                       "Settings → Secrets with all fields incl. a valid private_key; (2) the Sheet "
+                       "named above is shared as Editor with the service-account email above; "
+                       "(3) tracker_sheet_name in Secrets matches the Sheet's exact name.")
+    else:
+        st.success(f"✅ Connected to {_bk}.")
+
     tc1, tc2 = st.columns(2)
     with tc1:
         if st.button("Log projections", help="Logs all props (TB + H+R+RBI + priced Ks) for the loaded slate."):

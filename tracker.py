@@ -169,6 +169,42 @@ def backend_name() -> str:
     return "Google Sheet" if _gsheet() else "SQLite (local — not persistent on Streamlit Cloud)"
 
 
+def gsheet_diagnostic() -> dict:
+    """Non-destructive live check of the Google Sheets connection. Reports the exact
+    reason it is (or is not) connecting, WITHOUT exposing the private key."""
+    info = {"secret_present": False, "keys": [], "client_email": "",
+            "sheet_name": "", "ok": False, "error": ""}
+    try:
+        present = "gcp_service_account" in st.secrets
+    except Exception as e:
+        info["error"] = f"Streamlit secrets unavailable: {e}"
+        return info
+    info["secret_present"] = present
+    try:
+        info["sheet_name"] = st.secrets.get("tracker_sheet_name", "MLB TB Tracker")
+    except Exception:
+        pass
+    if not present:
+        info["error"] = "No [gcp_service_account] block found in the app's Secrets."
+        return info
+    try:
+        sa = dict(st.secrets["gcp_service_account"])
+        info["keys"] = sorted(sa.keys())
+        info["client_email"] = sa.get("client_email", "")
+        import gspread
+        from google.oauth2.service_account import Credentials
+        creds = Credentials.from_service_account_info(
+            sa, scopes=["https://www.googleapis.com/auth/spreadsheets",
+                        "https://www.googleapis.com/auth/drive"])
+        gc = gspread.authorize(creds)
+        sh = gc.open(info["sheet_name"])
+        _ = sh.sheet1.row_values(1)
+        info["ok"] = True
+    except Exception as e:
+        info["error"] = f"{type(e).__name__}: {e}"
+    return info
+
+
 def read_log() -> pd.DataFrame:
     df = None
     ws = _gsheet()
