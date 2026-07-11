@@ -103,26 +103,60 @@ def _sqlite_write(table, df):
 # --------------------------------------------------------------------------- #
 # Storage backend                                                             #
 # --------------------------------------------------------------------------- #
+@st.cache_resource(show_spinner=False)
+def _gc_client():
+    import gspread
+    from google.oauth2.service_account import Credentials
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]),
+        scopes=["https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"])
+    return gspread.authorize(creds)
+
+
+@st.cache_resource(show_spinner=False)
+def _spreadsheet(name: str):
+    gc = _gc_client()
+    try:
+        return gc.open(name)
+    except Exception:
+        return gc.create(name)
+
+
+@st.cache_resource(show_spinner=False)
+def _ws_cached(name: str, tab: str, cols: tuple):
+    """Cached worksheet handle. tab='' -> sheet1. Opens the spreadsheet once and
+    reuses the handle so we don't re-hit the Google API (rate-limit) on every call.
+    Only the handle is cached; data reads/writes still go live."""
+    sh = _spreadsheet(name)
+    if tab:
+        try:
+            w = sh.worksheet(tab)
+        except Exception:
+            w = sh.add_worksheet(title=tab, rows=4000, cols=len(cols))
+    else:
+        w = sh.sheet1
+    try:
+        if not w.row_values(1):
+            w.append_row(list(cols))
+    except Exception:
+        pass
+    return w
+
+
+def _sheet_name() -> str:
+    try:
+        return st.secrets.get("tracker_sheet_name", "MLB TB Tracker")
+    except Exception:
+        return "MLB TB Tracker"
+
+
 def _gsheet():
-    """Return a gspread worksheet if credentials are configured, else None."""
+    """Return the primary (log) worksheet, cached. None if unavailable."""
     try:
         if "gcp_service_account" not in st.secrets:
             return None
-        import gspread
-        from google.oauth2.service_account import Credentials
-        creds = Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]),
-            scopes=["https://www.googleapis.com/auth/spreadsheets",
-                    "https://www.googleapis.com/auth/drive"])
-        gc = gspread.authorize(creds)
-        name = st.secrets.get("tracker_sheet_name", "MLB TB Tracker")
-        try:
-            sh = gc.open(name)
-        except Exception:
-            sh = gc.create(name)
-        ws = sh.sheet1
-        if not ws.row_values(1):
-            ws.append_row(LOG_COLUMNS)
+        ws = _ws_cached(_sheet_name(), "", tuple(LOG_COLUMNS))
         try:
             st.session_state.pop('_gsheet_error', None)
         except Exception:
@@ -776,18 +810,10 @@ def stake_fraction(p: float, odds, kelly_mult: float = 0.25, max_frac: float = 0
 # Bet log (ROI / P&L)                                                         #
 # --------------------------------------------------------------------------- #
 def _bet_ws():
-    ws = _gsheet()
-    if not ws:
-        return None
     try:
-        sh = ws.spreadsheet
-        try:
-            bws = sh.worksheet("bets")
-        except Exception:
-            bws = sh.add_worksheet(title="bets", rows=2000, cols=len(BET_COLUMNS))
-        if not bws.row_values(1):
-            bws.append_row(BET_COLUMNS)
-        return bws
+        if "gcp_service_account" not in st.secrets:
+            return None
+        return _ws_cached(_sheet_name(), "bets", tuple(BET_COLUMNS))
     except Exception:
         return None
 
@@ -978,18 +1004,10 @@ def bankroll_stats(curve: pd.DataFrame, start: float = 100.0) -> dict:
 # Odds persistence (survives tab refresh / restart)                           #
 # --------------------------------------------------------------------------- #
 def _odds_ws():
-    ws = _gsheet()
-    if not ws:
-        return None
     try:
-        sh = ws.spreadsheet
-        try:
-            ows = sh.worksheet("odds")
-        except Exception:
-            ows = sh.add_worksheet(title="odds", rows=4000, cols=len(ODDS_COLUMNS))
-        if not ows.row_values(1):
-            ows.append_row(ODDS_COLUMNS)
-        return ows
+        if "gcp_service_account" not in st.secrets:
+            return None
+        return _ws_cached(_sheet_name(), "odds", tuple(ODDS_COLUMNS))
     except Exception:
         return None
 
@@ -1339,18 +1357,10 @@ SETTINGS_COLUMNS = ["key", "value"]
 
 
 def _settings_ws():
-    ws = _gsheet()
-    if not ws:
-        return None
     try:
-        sh = ws.spreadsheet
-        try:
-            sws = sh.worksheet("settings")
-        except Exception:
-            sws = sh.add_worksheet(title="settings", rows=50, cols=2)
-        if not sws.row_values(1):
-            sws.append_row(SETTINGS_COLUMNS)
-        return sws
+        if "gcp_service_account" not in st.secrets:
+            return None
+        return _ws_cached(_sheet_name(), "settings", tuple(SETTINGS_COLUMNS))
     except Exception:
         return None
 
